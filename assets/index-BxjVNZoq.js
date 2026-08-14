@@ -457,7 +457,7 @@ end`},{id:`sorting-greedy`,title:`Sorting & Greedy`,eyebrow:`Create a safe local
   end
 
   true
-end`}],ne=Object.fromEntries(C.map(e=>[e.id,e])),re=[{minutes:`0–5`,title:`Clarify`,detail:`Users, core actions, scale, consistency, latency, and what is explicitly out of scope.`},{minutes:`5–10`,title:`Estimate`,detail:`Requests/sec, storage growth, read/write ratio, object sizes, and peak multiplier.`},{minutes:`10–18`,title:`Contract`,detail:`Core APIs, data model, identifiers, pagination, idempotency, and authorization boundary.`},{minutes:`18–35`,title:`High-level design`,detail:`Draw the critical read and write paths. Make data ownership and async boundaries explicit.`},{minutes:`35–50`,title:`Deep dive`,detail:`Follow interviewer interest into scale, consistency, hot spots, failure recovery, or one difficult component.`},{minutes:`50–60`,title:`Pressure test`,detail:`Failures, observability, security, cost, rollout, and how the design evolves at 10× scale.`}],w=[{id:`social-feed`,title:`Social Feed`,subtitle:`Twitter / Instagram-style timelines`,prompt:`Design a service where users publish posts and read a ranked or chronological home feed.`,priorities:[`Fast feed reads`,`High write fan-out tolerance`,`Freshness`,`Celebrity hot spots`,`Eventual consistency is usually acceptable`],clarify:[`Chronological or ranked feed?`,`Following limit and expected follower distribution?`,`Text only or media references?`,`How fresh must a new post appear?`,`Do deletes/blocks need immediate enforcement?`],scale:[`Estimate daily active users and feed opens per user.`,`Model posts/sec separately from feed reads/sec; reads usually dominate.`,`Call out skew: a tiny set of authors may have millions of followers.`,`Estimate feed-entry storage, not only post-body storage.`],api:[`POST /posts {body, media_ids, idempotency_key}`,`GET /feed?cursor=...&limit=...`,`PUT /follows/:user_id`,`DELETE /posts/:post_id`],data:[`Post(post_id, author_id, body, created_at, visibility)`,`Follow(follower_id, followee_id, created_at)`,`FeedEntry(user_id, rank/time, post_id)`,`Use opaque cursor pagination; offsets become unstable and expensive.`],flow:[`Write post durably and return its ID.`,`Publish a post-created event.`,`Fan-out workers insert feed entries for ordinary authors.`,`Feed reads merge precomputed entries with on-read posts from high-follower authors.`,`Hydrate post/author data and enforce current visibility before returning.`],components:[{name:`Post service`,purpose:`Own post lifecycle and visibility`,why:`Keeps the source of truth separate from derived feeds.`},{name:`Social graph store`,purpose:`Resolve followers/followees`,why:`Relationship access patterns differ from post storage.`},{name:`Event log + workers`,purpose:`Buffer and distribute fan-out work`,why:`A post should not synchronously update thousands of feeds.`},{name:`Feed store/cache`,purpose:`Serve ordered post IDs quickly`,why:`Precomputation trades write work for low read latency.`}],decisions:[{question:`When is a feed assembled?`,optionA:`Fan-out on write: fast reads, expensive writes.`,optionB:`Fan-out on read: cheap writes, expensive reads.`,guidance:`Use a hybrid: precompute normal authors; merge celebrity posts at read time.`},{question:`How fresh must feeds be?`,optionA:`Synchronous propagation for immediate visibility.`,optionB:`Async propagation for resilience and throughput.`,guidance:`Usually async within seconds; allow an author's own new post to be overlaid immediately.`}],failures:[{failure:`Fan-out workers lag`,response:`Track oldest event age; autoscale consumers; degrade to on-read merge for freshness.`},{failure:`Duplicate post event`,response:`Make FeedEntry insertion idempotent with a unique (user_id, post_id) key.`},{failure:`Post deleted after fan-out`,response:`Treat feed entries as references; enforce visibility during hydration and clean asynchronously.`},{failure:`Celebrity creates a hot partition`,response:`Avoid per-follower synchronous writes; partition work and use on-read merge.`}],depth:[`Ranking signals and model versioning`,`Block/privacy enforcement`,`Feed cache invalidation`,`Backfill after follow`,`Multi-region read locality`]},{id:`realtime-chat`,title:`Realtime Chat`,subtitle:`Slack-style channels and direct messages`,prompt:`Design persistent group chat with real-time delivery, history, presence, and multiple devices per user.`,priorities:[`Low delivery latency`,`Durable history`,`Per-conversation ordering`,`Offline catch-up`,`Connection management`],clarify:[`Direct messages, channels, or both?`,`Maximum room size?`,`Exactly what ordering is promised?`,`Read receipts, typing, presence, edits, attachments?`,`How long is history retained?`],scale:[`Estimate concurrently connected clients, not only requests/sec.`,`Separate durable messages from ephemeral presence/typing events.`,`Estimate messages/sec, average recipients, and bytes/message.`,`Model reconnect bursts after regional/network events.`],api:[`POST /conversations/:id/messages {client_message_id, body}`,`GET /conversations/:id/messages?before=cursor`,`WebSocket/SSE stream for delivery events`,`POST /conversations/:id/read_cursor`],data:[`Conversation(conversation_id, type, created_at)`,`Membership(conversation_id, user_id, role)`,`Message(conversation_id, sequence, message_id, sender_id, body)`,`ReadCursor(user_id, conversation_id, sequence)`],flow:[`Authenticate a long-lived connection at a gateway.`,`On send, authorize membership and deduplicate client_message_id.`,`Assign a conversation-local sequence and durably append the message.`,`Publish delivery events to gateways holding recipient connections.`,`Offline devices resume from their last durable sequence.`],components:[{name:`Connection gateways`,purpose:`Own WebSocket/SSE sessions`,why:`Long-lived connections scale and fail differently from stateless APIs.`},{name:`Message service`,purpose:`Authorize and durably order messages`,why:`Acknowledgment should mean the message can be recovered.`},{name:`Conversation event stream`,purpose:`Distribute messages to online recipients`,why:`Decouples persistence from fan-out and absorbs bursts.`},{name:`Presence service`,purpose:`Track short-lived online state`,why:`Presence can be lossy and should not burden the durable message path.`}],decisions:[{question:`What ordering is guaranteed?`,optionA:`Global total order: simple semantics, major bottleneck.`,optionB:`Per-conversation order: scalable and matches user expectations.`,guidance:`Promise per-conversation server sequence; tolerate cross-conversation reordering.`},{question:`When do we acknowledge send?`,optionA:`After accepting in memory: lower latency, possible loss.`,optionB:`After durable append: slightly slower, clear recovery contract.`,guidance:`Acknowledge durable persistence, then deliver asynchronously.`}],failures:[{failure:`Gateway disconnects`,response:`Clients reconnect to any gateway and resume from last received sequence.`},{failure:`Delivery event duplicated`,response:`Clients deduplicate by message_id or sequence.`},{failure:`Slow consumer`,response:`Bound per-connection buffers, apply backpressure, then force catch-up from history.`},{failure:`Presence store unavailable`,response:`Degrade presence to unknown; do not block durable messaging.`}],depth:[`Message edits and tombstones`,`End-to-end encryption boundaries`,`Large channels`,`Push notifications`,`Multi-device read state`]},{id:`media-platform`,title:`Photo & Media Platform`,subtitle:`Instagram-style upload and delivery`,prompt:`Design image/video upload, processing, storage, and global delivery with user-facing metadata.`,priorities:[`Durability`,`Fast global delivery`,`Large-object throughput`,`Safe async processing`,`Cost control`],clarify:[`Images, video, or both?`,`Maximum sizes and supported formats?`,`Public, private, or shared visibility?`,`Which transformations are required?`,`Upload completion and processing latency targets?`],scale:[`Estimate uploads/day × average original size.`,`Estimate derived variants and retention multiplier.`,`Separate metadata QPS from object bandwidth.`,`Reads likely dwarf writes; model CDN hit ratio.`],api:[`POST /uploads to receive an upload session`,`Direct client upload to object storage using a short-lived signed URL`,`POST /uploads/:id/complete`,`GET /media/:id for metadata and authorized delivery URLs`],data:[`Media(media_id, owner_id, object_key, status, visibility, created_at)`,`Variant(media_id, kind, object_key, width, height, codec)`,`Keep bytes in object storage; keep searchable metadata in a database.`],flow:[`Create an upload session and authorize size/type.`,`Client uploads directly to durable object storage.`,`Completion event triggers malware scan and transformations.`,`Workers write idempotent variants and mark media ready.`,`CDN serves immutable versioned objects near readers.`],components:[{name:`Metadata API`,purpose:`Own media state and authorization`,why:`Small structured records need transactions and queries.`},{name:`Object storage`,purpose:`Durably hold large immutable bytes`,why:`Database blobs are costly and scale poorly for media delivery.`},{name:`Processing queue/workers`,purpose:`Scan, transcode, resize`,why:`CPU-heavy work should not extend request latency.`},{name:`CDN`,purpose:`Cache media close to users`,why:`Reduces origin bandwidth and global read latency.`}],decisions:[{question:`Who receives upload bytes?`,optionA:`API proxy: simpler control, doubles bandwidth and bottlenecks servers.`,optionB:`Direct-to-storage: scalable, requires signed upload lifecycle.`,guidance:`Use direct upload with constrained signed URLs and a completion handshake.`},{question:`How are replacements handled?`,optionA:`Overwrite stable keys: invalidation problems.`,optionB:`Immutable versioned keys: easy caching.`,guidance:`Prefer immutable objects and update metadata references.`}],failures:[{failure:`Client abandons upload`,response:`Expire sessions and garbage-collect unreferenced objects.`},{failure:`Transform worker retries`,response:`Use deterministic variant keys and idempotent status transitions.`},{failure:`CDN serves stale private access`,response:`Use short-lived signed URLs or edge authorization; never rely only on obscure paths.`},{failure:`Corrupt/malicious file`,response:`Quarantine until validation completes; never serve original as ready prematurely.`}],depth:[`Resumable multipart upload`,`Video segmenting`,`Content moderation`,`Lifecycle tiers`,`Regional data residency`]},{id:`ride-hailing`,title:`Ride Hailing`,subtitle:`Uber-style matching and trip state`,prompt:`Design a system that tracks drivers, matches nearby drivers to riders, and maintains a reliable trip lifecycle.`,priorities:[`Fresh geospatial state`,`Low match latency`,`Correct trip transitions`,`Contention control`,`Graceful degradation`],clarify:[`City/region scope and active driver count?`,`Target pickup radius and match latency?`,`Can multiple riders race for one driver?`,`Pricing/payment in scope?`,`How frequently do drivers report location?`],scale:[`Concurrent active drivers × location updates/second.`,`Ride requests/second at peak and geographic concentration.`,`Separate high-volume ephemeral locations from lower-volume durable trips.`,`Model hot events such as airport or stadium exits.`],api:[`PUT /drivers/:id/location {lat, lng, timestamp}`,`POST /ride-requests {pickup, destination, idempotency_key}`,`POST /rides/:id/accept`,`POST /rides/:id/transitions {expected_state, next_state}`],data:[`DriverAvailability(driver_id, geo_cell, updated_at, status) — ephemeral`,`Ride(ride_id, rider_id, driver_id, state, pickup, destination, version) — durable`,`RideEvent(ride_id, sequence, event_type, occurred_at)`],flow:[`Driver updates location into a partitioned geospatial index.`,`Rider request queries nearby available candidates.`,`Matching service scores a bounded candidate set.`,`Offer/lease a driver with an expiry so only one match wins.`,`Persist trip state transitions with optimistic concurrency.`],components:[{name:`Location service`,purpose:`Ingest and index fresh driver positions`,why:`High-churn ephemeral writes need different storage from trips.`},{name:`Matching service`,purpose:`Find and score nearby drivers`,why:`Owns radius expansion, fairness, ETA, and offer policy.`},{name:`Trip service`,purpose:`Own durable ride state machine`,why:`Prevents invalid or conflicting lifecycle transitions.`},{name:`Event/notification system`,purpose:`Update rider and driver clients`,why:`Participants need real-time state without polling the primary store.`}],decisions:[{question:`How exact must locations be?`,optionA:`Strongly consistent positions: expensive and unnecessary.`,optionB:`Eventually consistent recent positions: scalable but may be stale.`,guidance:`Use freshness timestamps and verify availability during lease/accept.`},{question:`How is a driver reserved?`,optionA:`Database transaction on every candidate.`,optionB:`Short distributed lease/offer, followed by durable assignment.`,guidance:`Lease candidates briefly; conditional transition ensures only one ride assigns the driver.`}],failures:[{failure:`Driver location goes stale`,response:`Exclude entries past a freshness threshold; mark offline asynchronously.`},{failure:`Two matchers select one driver`,response:`Use a conditional lease or compare-and-set on driver availability.`},{failure:`Client repeats trip transition`,response:`Use expected state/version and idempotency keys.`},{failure:`Location index unavailable`,response:`Degrade to a wider/staler regional snapshot or pause matching rather than double-assign.`}],depth:[`Geo-cell partitioning`,`Radius expansion`,`Marketplace fairness`,`ETA computation`,`Trip event auditability`]},{id:`job-queue`,title:`Distributed Job Queue`,subtitle:`Scheduling, retries, and worker coordination`,prompt:`Design a service where producers submit jobs that workers execute asynchronously and reliably.`,priorities:[`Durable acceptance`,`At-least-once processing`,`Backpressure`,`Retries`,`Operational visibility`],clarify:[`Immediate and scheduled jobs?`,`Maximum payload and execution time?`,`Ordering or priority requirements?`,`At-least-once or stronger semantics?`,`How are failures and poison jobs handled?`],scale:[`Jobs/sec, burst multiplier, payload size, and retention.`,`Worker throughput by job type and duration distribution.`,`Queue depth is insufficient; track age of oldest ready job.`,`Estimate retry amplification during a downstream outage.`],api:[`POST /jobs {type, payload_ref, run_at, priority, idempotency_key}`,`GET /jobs/:id`,`POST /jobs/:id/cancel`,`Worker lease/ack/fail protocol`],data:[`Job(job_id, type, status, run_at, attempt, max_attempts, payload_ref)`,`JobAttempt(job_id, attempt, worker_id, started_at, ended_at, error)`,`Store large payloads externally and reference them.`],flow:[`Producer submits and receives acknowledgment only after durable storage.`,`Dispatcher moves due jobs into ready partitions.`,`Worker leases a job with a visibility timeout.`,`Worker completes idempotent work and acknowledges.`,`Expired leases retry with exponential backoff; exhausted jobs enter a dead-letter queue.`],components:[{name:`Submission API`,purpose:`Validate and durably accept work`,why:`Provides idempotency and a stable job identity.`},{name:`Scheduler`,purpose:`Release delayed jobs when due`,why:`Ready queues stay optimized for immediate consumption.`},{name:`Ready queues`,purpose:`Buffer jobs by type/priority`,why:`Decouple producer bursts from worker capacity.`},{name:`Workers + lease manager`,purpose:`Execute with bounded ownership`,why:`A crashed worker's job must become available again.`}],decisions:[{question:`What delivery guarantee?`,optionA:`At-most-once: may lose work.`,optionB:`At-least-once: duplicates possible.`,guidance:`Use at-least-once and require idempotent handlers; exactly-once effects need domain cooperation.`},{question:`Where is retry state?`,optionA:`Worker memory: lost on crash.`,optionB:`Durable job/attempt state: recoverable.`,guidance:`Persist attempt count and next run time; use jittered exponential backoff.`}],failures:[{failure:`Worker dies mid-job`,response:`Lease expires and job becomes visible; handler deduplicates side effects.`},{failure:`Downstream dependency fails`,response:`Back off with jitter, trip circuit breakers, cap retries, monitor queue age.`},{failure:`Poison job always crashes`,response:`Move to dead-letter storage with error context and replay tooling.`},{failure:`Producers exceed capacity`,response:`Apply quotas/backpressure and autoscale using queue age, not just depth.`}],depth:[`Priority starvation`,`Per-tenant fairness`,`Long-running heartbeats`,`Exactly-once business effects`,`Replay and audit tooling`]},{id:`rate-limiter`,title:`Rate Limiter`,subtitle:`Protecting services fairly at high scale`,prompt:`Design a distributed rate limiter for APIs with per-user, per-tenant, and global limits.`,priorities:[`Low decision latency`,`Correct-enough distributed counts`,`Fairness`,`Availability`,`Clear client feedback`],clarify:[`Limit by user, API key, IP, tenant, or route?`,`Hard enforcement or approximate protection?`,`Burst allowance?`,`Single region or global?`,`What happens if the limiter is unavailable?`],scale:[`Decision QPS can equal or exceed API request QPS.`,`Estimate cardinality of active limit keys and window duration.`,`Model hot tenants and shared NAT IPs.`,`Budget limiter latency as a small fraction of endpoint latency.`],api:[`Internal check(key, policy, cost) → allowed, remaining, retry_after`,`Return 429 with Retry-After when rejected`,`Policies are versioned configuration, not hard-coded per call`],data:[`Policy(scope, capacity, refill_rate, burst, mode)`,`Counter/token state keyed by policy + subject`,`Expire inactive keys to bound memory.`],flow:[`Gateway authenticates and derives stable limit keys.`,`Limiter atomically evaluates and updates token/counter state.`,`Allowed requests continue with remaining quota metadata.`,`Rejected requests stop before expensive downstream work.`,`Aggregate telemetry reveals abuse, false positives, and policy impact.`],components:[{name:`Policy service`,purpose:`Own versioned limits and overrides`,why:`Enforcement code should not contain product policy.`},{name:`Decision service`,purpose:`Perform atomic low-latency checks`,why:`Centralizes algorithm and consistent response semantics.`},{name:`Distributed state store`,purpose:`Hold short-lived counters/tokens`,why:`Instances must coordinate without routing every key to one process.`},{name:`Local safety limiter`,purpose:`Protect during dependency failure`,why:`Provides coarse fallback and shields the central limiter.`}],decisions:[{question:`Which algorithm?`,optionA:`Fixed/sliding windows: intuitive, can spike at boundaries.`,optionB:`Token bucket: smooth refill with controlled bursts.`,guidance:`Token bucket is a strong default; explain capacity and refill rate.`},{question:`Fail open or closed?`,optionA:`Open preserves availability but risks overload.`,optionB:`Closed protects capacity but can cause total outage.`,guidance:`Choose per endpoint; use local fallback and tighter limits for expensive writes.`}],failures:[{failure:`Central limiter unavailable`,response:`Use bounded local token buckets; choose fail-open/closed by endpoint risk.`},{failure:`Hot key overloads one partition`,response:`Shard global limits, use hierarchical aggregation, or reserve per-region budgets.`},{failure:`Clock skew affects windows`,response:`Prefer server-side monotonic timing and avoid client timestamps.`},{failure:`Policy update is bad`,response:`Version, canary, audit, and support instant rollback.`}],depth:[`Token bucket math`,`Global versus regional budgets`,`Approximate counters`,`Tenant hierarchy`,`Abuse evasion`]}],ie=Object.fromEntries(w.map(e=>[e.id,e])),ae=[{title:`Requirements`,prompt:`What are we building—and what are we explicitly not building?`,points:[`Name primary actors and top 2–3 actions.`,`Separate functional behavior from quality attributes.`,`Prioritize consistency, availability, latency, durability, cost, and privacy.`]},{title:`Numbers`,prompt:`What must the system survive?`,points:[`Average and peak requests/sec.`,`Read/write ratio and payload sizes.`,`Storage growth and retention.`,`Concurrent connections and geographic distribution.`]},{title:`Contracts`,prompt:`Where are the stable boundaries?`,points:[`Core APIs and identifiers.`,`Pagination and ordering.`,`Idempotency and authorization.`,`Data ownership and lifecycle.`]},{title:`Data flow`,prompt:`What happens on the critical read and write paths?`,points:[`Draw the simplest end-to-end path first.`,`Mark synchronous versus asynchronous boundaries.`,`Name the source of truth and derived state.`,`Identify the likely bottleneck.`]},{title:`Trade-offs`,prompt:`Why does each component earn its place?`,points:[`Describe capability before product name.`,`State what improves and what becomes harder.`,`Tie decisions to stated requirements.`,`Explain how the design evolves at 10×.`]},{title:`Failure`,prompt:`How does the system behave when parts fail?`,points:[`Timeouts, retries, idempotency, and backoff.`,`Partial failure and stale data.`,`Backpressure and overload behavior.`,`Detection, recovery, and operator controls.`]}];function oe({code:e}){let[t,n]=(0,f.useState)(!1);return(0,p.jsxs)(`div`,{className:`code-wrap`,children:[(0,p.jsx)(`button`,{className:`copy-button`,onClick:async()=>{await navigator.clipboard.writeText(e),n(!0),window.setTimeout(()=>n(!1),1200)},"aria-label":`Copy Ruby code`,children:t?`Copied`:`Copy`}),(0,p.jsx)(`pre`,{children:(0,p.jsx)(`code`,{children:e})})]})}var se={"0001_two_sum":[`arrays-hashes`],"0003_longest_substring":[`sliding-window`,`arrays-hashes`],"0015_3sum":[`two-pointers`,`sorting-greedy`],"0020_valid_parentheses":[`stack`],"0021_merge_two_sorted_lists":[`linked-lists`],"0033_search_rotated_array":[`binary-search`],"0039_combination_sum":[`backtracking`],"0046_permutations":[`backtracking`],"0053_maximum_subarray":[`dynamic-programming`],"0056_merge_intervals":[`intervals`,`sorting-greedy`],"0057_insert_interval":[`intervals`],"0070_climbing_stairs":[`dynamic-programming`],"0076_min_window_substring":[`sliding-window`,`arrays-hashes`],"0102_binary_tree_level_order":[`queue-bfs`,`trees`],"0104_max_depth_of_binary_tree":[`trees`],"0110_balanced_binary_tree":[`trees`],"0121_best_time_buy_sell_stock":[`sorting-greedy`],"0125_valid_palindrome":[`two-pointers`],"0133_clone_graph":[`graphs`,`queue-bfs`],"0141_linked_list_cycle":[`linked-lists`,`two-pointers`],"0150_eval_reverse_polish":[`stack`],"0155_min_stack":[`stack`],"0200_number_of_islands":[`graphs`,`queue-bfs`],"0206_reverse_linked_list":[`linked-lists`],"0207_course_schedule":[`graphs`],"0216_combination_sum_3":[`backtracking`],"0217_contains_duplicates":[`arrays-hashes`],"0226_invert_binary_tree":[`trees`],"0232_queue_using_stacks":[`stack`,`queue-bfs`],"0235_lca_binary_search_tree":[`trees`],"0238_product_of_array":[`prefix-sums`],"0242_valid_anagram":[`arrays-hashes`],"0252_meeting_rooms":[`intervals`,`sorting-greedy`],"0278_first_bad_version":[`binary-search`],"0322_coin_change":[`dynamic-programming`],"0383_ransom_note":[`arrays-hashes`],"0409_longest_palindrome":[`arrays-hashes`],"0509_fibonacci_number":[`dynamic-programming`],"0535_encode_decode_tinyurl":[`arrays-hashes`],"0542_01_matrix":[`dynamic-programming`],"0543_diameter_of_binary_tree":[`trees`],"0704_binary_search":[`binary-search`],"0733_flood_fill":[`graphs`,`queue-bfs`],"0876_middle_of_linked_list":[`linked-lists`,`two-pointers`],"0973_k_closest_points":[`heap`,`sorting-greedy`],"0981_time_based_kv_store":[`binary-search`,`arrays-hashes`],"0994_rotting_oranges":[`queue-bfs`,`graphs`],"1852_distinct_nums_subarray":[`sliding-window`,`arrays-hashes`]};function ce(e,t){return se[e]?.includes(t)??!1}var T=[{id:`0001_two_sum`,number:1,title:`Two Sum`,prompt:`Return two indexes whose values add to a target.`,pattern:`Hash lookup`,approach:`One-pass complement hash`,time:`O(n)`,space:`O(n)`},{id:`0003_longest_substring`,number:3,title:`Longest Substring Without Repeating Characters`,prompt:`Find the longest contiguous substring containing no repeated character.`,pattern:`Sliding window`,approach:`Variable window with last-seen indexes`,time:`O(n)`,space:`O(k)`},{id:`0015_3sum`,number:15,title:`3Sum`,prompt:`Return every unique triplet whose values sum to zero.`,pattern:`Sorting + two pointers`,approach:`Fix an anchor, then run 2Sum II on the suffix`,time:`O(n²)`,space:`O(n)`},{id:`0020_valid_parentheses`,number:20,title:`Valid Parentheses`,prompt:`Determine whether brackets are correctly matched and nested.`,pattern:`Stack`,approach:`Append openers; pop and match each closer`,time:`O(n)`,space:`O(n)`},{id:`0021_merge_two_sorted_lists`,number:21,title:`Merge Two Sorted Lists`,prompt:`Merge two sorted linked lists into one sorted list.`,pattern:`Linked-list pointers`,approach:`Iterative merge behind a sentinel node`,time:`O(n + m)`,space:`O(1)`},{id:`0033_search_rotated_array`,number:33,title:`Search in Rotated Sorted Array`,prompt:`Find a target in a sorted array that was rotated once.`,pattern:`Binary search`,approach:`Identify the sorted half before discarding one side`,time:`O(log n)`,space:`O(1)`},{id:`0039_combination_sum`,number:39,title:`Combination Sum`,prompt:`Return combinations that add to a target when candidates may be reused.`,pattern:`Backtracking`,approach:`Choose, explore with remaining target, then undo`,time:`O(N^(T/M)) worst case`,space:`O(T/M)`},{id:`0046_permutations`,number:46,title:`Permutations`,prompt:`Return every ordering of a list of distinct values.`,pattern:`Backtracking`,approach:`Build each ordering with choose, explore, undo`,time:`O(n · n!)`,space:`O(n) excluding output`},{id:`0053_maximum_subarray`,number:53,title:`Maximum Subarray`,prompt:`Find the largest sum among all contiguous subarrays.`,pattern:`Dynamic programming / greedy`,approach:`Kadane’s algorithm: extend or restart at each value`,time:`O(n)`,space:`O(1)`},{id:`0056_merge_intervals`,number:56,title:`Merge Intervals`,prompt:`Combine every overlapping interval.`,pattern:`Sorting + sweep`,approach:`Sort by start, then extend the active interval`,time:`O(n log n)`,space:`O(n)`},{id:`0057_insert_interval`,number:57,title:`Insert Interval`,prompt:`Insert one interval into sorted non-overlapping intervals and merge as needed.`,pattern:`Intervals`,approach:`Append before, merge overlaps, append after`,time:`O(n)`,space:`O(1) excluding output`},{id:`0067_add_binary`,number:67,title:`Add Binary`,prompt:`Add two binary strings and return their binary sum.`,pattern:`Right-to-left simulation`,approach:`Walk both strings with a carry`,time:`O(max(n, m))`,space:`O(max(n, m))`},{id:`0070_climbing_stairs`,number:70,title:`Climbing Stairs`,prompt:`Count ways to reach step n using one- or two-step moves.`,pattern:`Dynamic programming`,approach:`Fibonacci recurrence from smaller stair counts`,time:`O(n)`,space:`O(n)`},{id:`0076_min_window_substring`,number:76,title:`Minimum Window Substring`,prompt:`Find the shortest substring containing all required character counts.`,pattern:`Sliding window`,approach:`Expand to satisfy counts, then shrink while valid`,time:`O(n + m)`,space:`O(k)`},{id:`0102_binary_tree_level_order`,number:102,title:`Binary Tree Level Order Traversal`,prompt:`Return tree values grouped by depth.`,pattern:`Breadth-first search`,approach:`Queue nodes and process one captured level size at a time`,time:`O(n)`,space:`O(n)`},{id:`0104_max_depth_of_binary_tree`,number:104,title:`Maximum Depth of Binary Tree`,prompt:`Return the number of nodes on the longest root-to-leaf path.`,pattern:`Tree DFS`,approach:`Return 1 plus the deeper child height`,time:`O(n)`,space:`O(h)`},{id:`0110_balanced_binary_tree`,number:110,title:`Balanced Binary Tree`,prompt:`Determine whether every node’s subtree heights differ by at most one.`,pattern:`Postorder tree DFS`,approach:`Return height or a sentinel for imbalance`,time:`O(n)`,space:`O(h)`},{id:`0121_best_time_buy_sell_stock`,number:121,title:`Best Time to Buy and Sell Stock`,prompt:`Maximize profit from one buy followed by one sell.`,pattern:`One-pass greedy`,approach:`Track the lowest prior price and best profit`,time:`O(n)`,space:`O(1)`},{id:`0125_valid_palindrome`,number:125,title:`Valid Palindrome`,prompt:`Check whether alphanumeric characters read the same in both directions.`,pattern:`Two pointers`,approach:`Move inward while skipping non-alphanumeric characters`,time:`O(n)`,space:`O(1)`},{id:`0133_clone_graph`,number:133,title:`Clone Graph`,prompt:`Deep-copy every node and edge in a connected graph.`,pattern:`Graph traversal + hash`,approach:`BFS with original-node to clone mapping`,time:`O(V + E)`,space:`O(V)`},{id:`0136_single_number`,number:136,title:`Single Number`,prompt:`Find the one value that appears once when every other value appears twice.`,pattern:`Bit manipulation`,approach:`XOR every value to cancel equal pairs`,time:`O(n)`,space:`O(1)`},{id:`0141_linked_list_cycle`,number:141,title:`Linked List Cycle`,prompt:`Determine whether following next pointers eventually repeats a node.`,pattern:`Fast and slow pointers`,approach:`Floyd’s tortoise-and-hare cycle detection`,time:`O(n)`,space:`O(1)`},{id:`0150_eval_reverse_polish`,number:150,title:`Evaluate Reverse Polish Notation`,prompt:`Evaluate a postfix arithmetic expression.`,pattern:`Stack`,approach:`Append numbers; pop two operands for each operator`,time:`O(n)`,space:`O(n)`},{id:`0155_min_stack`,number:155,title:`Min Stack`,prompt:`Design a stack supporting push, pop, top, and minimum in constant time.`,pattern:`Augmented stack`,approach:`Store the minimum associated with each stack state`,time:`O(1) per operation`,space:`O(n)`},{id:`0169_majority_element`,number:169,title:`Majority Element`,prompt:`Find the value occurring more than half the time.`,pattern:`Boyer–Moore voting`,approach:`Cancel different values while maintaining one candidate`,time:`O(n)`,space:`O(1)`},{id:`0200_number_of_islands`,number:200,title:`Number of Islands`,prompt:`Count connected groups of land cells in a grid.`,pattern:`Grid BFS`,approach:`Flood-fill each unseen land component once`,time:`O(rows · cols)`,space:`O(rows · cols)`},{id:`0206_reverse_linked_list`,number:206,title:`Reverse Linked List`,prompt:`Reverse every next pointer in a singly linked list.`,pattern:`Linked-list pointers`,approach:`Iteratively preserve next, rewire, and advance`,time:`O(n)`,space:`O(1)`},{id:`0207_course_schedule`,number:207,title:`Course Schedule`,prompt:`Determine whether directed prerequisites contain a cycle.`,pattern:`Topological sort`,approach:`Kahn’s algorithm with indegrees and a queue`,time:`O(V + E)`,space:`O(V + E)`},{id:`0208_implement_trie`,number:208,title:`Implement Trie`,prompt:`Support word insertion, exact search, and prefix search.`,pattern:`Trie`,approach:`Walk one child edge per character`,time:`O(L) per operation`,space:`O(total characters)`},{id:`0216_combination_sum_3`,number:216,title:`Combination Sum III`,prompt:`Choose k distinct digits from 1–9 whose sum equals n.`,pattern:`Backtracking`,approach:`Explore increasing digits with count and sum pruning`,time:`O(Σ C(9,d) + R·k)`,space:`O(k) excluding output`},{id:`0217_contains_duplicates`,number:217,title:`Contains Duplicate`,prompt:`Determine whether any value appears more than once.`,pattern:`Hash membership`,approach:`Compare each value against a seen hash`,time:`O(n)`,space:`O(n)`},{id:`0226_invert_binary_tree`,number:226,title:`Invert Binary Tree`,prompt:`Swap every node’s left and right subtrees.`,pattern:`Tree DFS`,approach:`Recursively invert children, then swap them`,time:`O(n)`,space:`O(h)`},{id:`0232_queue_using_stacks`,number:232,title:`Implement Queue Using Stacks`,prompt:`Implement FIFO behavior using only stack operations.`,pattern:`Two stacks`,approach:`Lazy transfer from input stack to output stack`,time:`O(1) amortized`,space:`O(n)`},{id:`0235_lca_binary_search_tree`,number:235,title:`Lowest Common Ancestor of a BST`,prompt:`Find the lowest node whose subtree contains both targets.`,pattern:`BST ordering`,approach:`Walk toward both values until they split around the current node`,time:`O(h)`,space:`O(1)`},{id:`0238_product_of_array`,number:238,title:`Product of Array Except Self`,prompt:`Return each position’s product of all other values without division.`,pattern:`Prefix and suffix products`,approach:`Write prefix products, then multiply a running suffix`,time:`O(n)`,space:`O(1) excluding output`},{id:`0242_valid_anagram`,number:242,title:`Valid Anagram`,prompt:`Determine whether two strings contain identical character counts.`,pattern:`Frequency counting`,approach:`Increment for one string and decrement for the other`,time:`O(n + m)`,space:`O(k)`},{id:`0252_meeting_rooms`,number:252,title:`Meeting Rooms`,prompt:`Determine whether any meeting intervals overlap.`,pattern:`Sorting + intervals`,approach:`Sort by start and compare adjacent boundaries`,time:`O(n log n)`,space:`O(n)`},{id:`0278_first_bad_version`,number:278,title:`First Bad Version`,prompt:`Find the first true value in a monotonic sequence of versions.`,pattern:`Binary search`,approach:`Lower-bound search for the first bad version`,time:`O(log n)`,space:`O(1)`},{id:`0322_coin_change`,number:322,title:`Coin Change`,prompt:`Find the fewest coins needed to make an amount.`,pattern:`Dynamic programming`,approach:`Build the best answer for every smaller amount`,time:`O(amount · coins)`,space:`O(amount)`},{id:`0383_ransom_note`,number:383,title:`Ransom Note`,prompt:`Determine whether magazine characters can construct a note.`,pattern:`Frequency counting`,approach:`Build available counts, then consume each required character`,time:`O(n + m)`,space:`O(k)`},{id:`0409_longest_palindrome`,number:409,title:`Longest Palindrome`,prompt:`Find the longest palindrome length constructible from supplied characters.`,pattern:`Frequency parity`,approach:`Use every pair plus at most one odd center`,time:`O(n)`,space:`O(k)`},{id:`0509_fibonacci_number`,number:509,title:`Fibonacci Number`,prompt:`Return the nth Fibonacci number.`,pattern:`Dynamic programming`,approach:`Iterate while retaining only the previous two values`,time:`O(n)`,space:`O(1)`},{id:`0535_encode_decode_tinyurl`,number:535,title:`Encode and Decode TinyURL`,prompt:`Design reversible short aliases for long URLs.`,pattern:`Hash-backed design`,approach:`Generate a unique key and store its URL mapping`,time:`O(1) average per operation`,space:`O(n) mappings`},{id:`0542_01_matrix`,number:542,title:`01 Matrix`,prompt:`Return each cell’s distance to its nearest zero.`,pattern:`Grid dynamic programming`,approach:`Forward and reverse directional distance passes`,time:`O(rows · cols)`,space:`O(1) excluding output`},{id:`0543_diameter_of_binary_tree`,number:543,title:`Diameter of Binary Tree`,prompt:`Find the longest path between any two tree nodes.`,pattern:`Postorder tree DFS`,approach:`Return subtree height while recording left height + right height`,time:`O(n)`,space:`O(h)`},{id:`0704_binary_search`,number:704,title:`Binary Search`,prompt:`Find a target index in a sorted array.`,pattern:`Binary search`,approach:`Maintain an inclusive interval and discard half each step`,time:`O(log n)`,space:`O(1)`},{id:`0733_flood_fill`,number:733,title:`Flood Fill`,prompt:`Recolor the connected component containing a starting pixel.`,pattern:`Grid DFS / BFS`,approach:`Traverse matching neighbors and mark them immediately`,time:`O(rows · cols)`,space:`O(rows · cols)`},{id:`0876_middle_of_linked_list`,number:876,title:`Middle of the Linked List`,prompt:`Return the middle node, choosing the second middle when length is even.`,pattern:`Fast and slow pointers`,approach:`Move slow once and fast twice`,time:`O(n)`,space:`O(1)`},{id:`0973_k_closest_points`,number:973,title:`K Closest Points to Origin`,prompt:`Return the k points with the smallest squared distance from the origin.`,pattern:`Sorting / top K`,approach:`Sort points by squared distance and take k`,time:`O(n log n)`,space:`O(n)`},{id:`0981_time_based_kv_store`,number:981,title:`Time Based Key-Value Store`,prompt:`Store timestamped values and retrieve the newest value at or before a time.`,pattern:`Hash + binary search`,approach:`Append ordered versions per key; upper-bound search on get`,time:`set O(1); get O(log n)`,space:`O(n)`},{id:`0994_rotting_oranges`,number:994,title:`Rotting Oranges`,prompt:`Find minutes for rot to reach every fresh orange, or report impossibility.`,pattern:`Multi-source BFS`,approach:`Start from every rotten orange and process the grid by minute`,time:`O(rows · cols)`,space:`O(rows · cols)`},{id:`1852_distinct_nums_subarray`,number:1852,title:`Distinct Numbers in Each Subarray`,prompt:`Count distinct values in every contiguous window of size k.`,pattern:`Fixed sliding window`,approach:`Maintain a frequency hash while one value enters and one leaves`,time:`O(n)`,space:`O(k)`}],le=Object.fromEntries(T.map(e=>[e.id,e]));function E({title:e,items:t,tone:n}){return(0,p.jsxs)(`section`,{className:`bullet-panel ${n}`,children:[(0,p.jsx)(`h3`,{children:e}),(0,p.jsx)(`ul`,{children:t.map(e=>(0,p.jsx)(`li`,{children:e},e))})]})}function D({algorithm:e}){let t=C.findIndex(t=>t.id===e.id),n=C[(t-1+C.length)%C.length],r=C[(t+1)%C.length],i=T.filter(t=>ce(t.id,e.id));return(0,p.jsxs)(v,{active:`algorithms`,children:[(0,p.jsx)(y,{kicker:e.eyebrow,title:e.title,copy:e.summary,children:(0,p.jsxs)(`div`,{className:`hero-metrics`,children:[(0,p.jsxs)(`span`,{children:[(0,p.jsx)(`small`,{children:`Time`}),e.time]}),(0,p.jsxs)(`span`,{children:[(0,p.jsx)(`small`,{children:`Space`}),e.space]})]})}),(0,p.jsxs)(`section`,{className:`section detail-section`,children:[(0,p.jsxs)(`aside`,{className:`detail-toc`,children:[(0,p.jsx)(`a`,{href:`/algorithms/`,children:`← All algorithms`}),(0,p.jsx)(`p`,{children:`On this page`}),(0,p.jsx)(`a`,{href:`#model`,children:`Mental model`}),e.primer&&(0,p.jsx)(`a`,{href:`#primer`,children:`First principles`}),i.length>0&&(0,p.jsx)(`a`,{href:`#related-problems`,children:`Related problems`}),(0,p.jsx)(`a`,{href:`#decision`,children:`When to use`}),(0,p.jsx)(`a`,{href:`#method`,children:`Method`}),(0,p.jsx)(`a`,{href:`#examples`,children:`Examples`}),(0,p.jsx)(`a`,{href:`#ruby`,children:`Ruby 3.2`})]}),(0,p.jsxs)(`article`,{className:`detail-content`,children:[(0,p.jsxs)(`section`,{className:`mental-callout`,id:`model`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Mental model`}),(0,p.jsx)(`h2`,{children:e.mentalModel})]}),e.primer&&(0,p.jsxs)(`section`,{className:`concept-primer`,id:`primer`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`First principles`}),(0,p.jsx)(`h2`,{children:e.primer.title}),(0,p.jsx)(`p`,{className:`primer-intro`,children:e.primer.intro}),(0,p.jsx)(`div`,{className:`primer-walkthrough`,children:e.primer.walkthrough.map((e,t)=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`span`,{children:String(t+1).padStart(2,`0`)}),(0,p.jsx)(`h3`,{children:e.action}),(0,p.jsx)(`code`,{children:e.state}),(0,p.jsx)(`p`,{children:e.explanation})]},e.action))}),(0,p.jsx)(`div`,{className:`primer-terms`,children:e.primer.terms.map(e=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`h3`,{children:e.term}),(0,p.jsx)(`p`,{children:e.definition})]},e.term))})]}),i.length>0&&(0,p.jsxs)(`section`,{className:`related-problems`,id:`related-problems`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Problem guides using this pattern`}),(0,p.jsx)(`h2`,{children:`Practice the connection`}),(0,p.jsx)(`p`,{className:`related-intro`,children:`Name why the pattern fits before opening a solution.`}),(0,p.jsx)(`div`,{className:`related-problem-grid`,children:i.map(e=>(0,p.jsxs)(`a`,{href:`/problems/${e.id}/`,children:[(0,p.jsxs)(`span`,{children:[`#`,e.number,` · `,e.pattern]}),(0,p.jsx)(`h3`,{children:e.title}),(0,p.jsx)(`p`,{children:e.prompt}),(0,p.jsxs)(`strong`,{children:[e.time,` time →`]})]},e.id))})]}),(0,p.jsxs)(`div`,{className:`decision-grid`,id:`decision`,children:[(0,p.jsx)(E,{title:`Use it when`,items:e.whenToUse,tone:`yes`}),(0,p.jsx)(E,{title:`Do not reach for it when`,items:e.whenNotToUse,tone:`no`})]}),(0,p.jsxs)(`section`,{className:`method-section`,id:`method`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`The method`}),(0,p.jsx)(`h2`,{children:`Talk through it before coding it.`}),(0,p.jsx)(`ol`,{children:e.steps.map((e,t)=>(0,p.jsxs)(`li`,{children:[(0,p.jsx)(`span`,{children:t+1}),(0,p.jsx)(`p`,{children:e})]},e))})]}),(0,p.jsxs)(`section`,{className:`pitfall-section`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Common failure modes`}),(0,p.jsx)(`div`,{children:e.pitfalls.map(e=>(0,p.jsx)(`p`,{children:e},e))})]}),(0,p.jsxs)(`section`,{className:`example-section`,id:`examples`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Practice recognizing it`}),(0,p.jsx)(`h2`,{children:`Example problems`}),(0,p.jsx)(`div`,{className:`example-grid`,children:e.examples.map(e=>(0,p.jsxs)(`article`,{className:`example-card`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`span`,{children:e.difficulty}),(0,p.jsx)(`h3`,{children:e.title})]}),(0,p.jsx)(`p`,{children:e.prompt}),(0,p.jsxs)(`dl`,{children:[(0,p.jsx)(`dt`,{children:`Signal`}),(0,p.jsx)(`dd`,{children:e.signal}),(0,p.jsx)(`dt`,{children:`Approach`}),(0,p.jsx)(`dd`,{children:e.outline})]})]},e.title))})]}),(0,p.jsxs)(`section`,{className:`ruby-example`,id:`ruby`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Ruby 3.2 template`}),(0,p.jsx)(`h2`,{children:`A clean starting point`}),(0,p.jsx)(oe,{code:e.code})]})]})]}),(0,p.jsxs)(`nav`,{className:`next-guide`,children:[(0,p.jsxs)(`a`,{href:`/algorithms/${n.id}/`,children:[(0,p.jsx)(`small`,{children:`Previous`}),(0,p.jsxs)(`strong`,{children:[`← `,n.title]})]}),(0,p.jsxs)(`a`,{href:`/algorithms/${r.id}/`,children:[(0,p.jsx)(`small`,{children:`Next`}),(0,p.jsxs)(`strong`,{children:[r.title,` →`]})]})]})]})}function ue(){let[e,t]=(0,f.useState)(``),n=(0,f.useMemo)(()=>{let t=e.trim().toLowerCase();return t?C.filter(e=>[e.title,e.eyebrow,e.summary,...e.whenToUse,...e.examples.map(e=>e.title)].join(` `).toLowerCase().includes(t)):C},[e]);return(0,p.jsxs)(v,{active:`algorithms`,children:[(0,p.jsx)(b,{label:`Algorithm review`,title:`Algorithms`,reminder:`Name the structural cue before the algorithm. Then say what state you need to maintain and what makes each step safe.`,cues:[`contiguous → window`,`sorted / monotonic → pointers or binary search`,`repeated best → heap`,`dependencies → graph`]}),(0,p.jsxs)(`section`,{className:`section library-section`,children:[(0,p.jsxs)(`div`,{className:`library-toolbar`,children:[(0,p.jsxs)(`p`,{"aria-live":`polite`,children:[(0,p.jsx)(`strong`,{children:n.length===C.length?`${C.length} guides`:`${n.length} of ${C.length} guides`}),` Search by a cue from the problem, not just an algorithm name.`]}),(0,p.jsxs)(`div`,{className:`search-box`,role:`search`,children:[(0,p.jsx)(`span`,{"aria-hidden":`true`,children:`⌕`}),(0,p.jsx)(`input`,{"aria-label":`Search algorithm guides`,value:e,onChange:e=>t(e.target.value),placeholder:`Search: top k, contiguous, dependencies…`}),e&&(0,p.jsx)(`button`,{type:`button`,"aria-label":`Clear algorithm search`,onClick:()=>t(``),children:`×`})]})]}),(0,p.jsx)(`div`,{className:`guide-grid`,children:n.map((e,t)=>(0,p.jsxs)(`a`,{className:`guide-card`,href:`/algorithms/${e.id}/`,children:[(0,p.jsxs)(`div`,{className:`guide-card-top`,children:[(0,p.jsx)(`span`,{children:String(t+1).padStart(2,`0`)}),(0,p.jsx)(`em`,{children:e.eyebrow})]}),(0,p.jsx)(`h2`,{children:e.title}),(0,p.jsx)(`p`,{children:e.summary}),(0,p.jsxs)(`div`,{className:`guide-card-meta`,children:[(0,p.jsx)(`code`,{children:e.time}),(0,p.jsx)(`strong`,{children:`Read guide →`})]})]},e.id))}),n.length===0&&(0,p.jsx)(`div`,{className:`no-results`,children:`No match. Try the problem's structural cue rather than its story.`})]})]})}function de({id:e,kicker:t,title:n,items:r}){return(0,p.jsxs)(`section`,{className:`arch-list-section`,id:e,children:[(0,p.jsx)(`p`,{className:`kicker`,children:t}),(0,p.jsx)(`h2`,{children:n}),(0,p.jsx)(`ul`,{children:r.map(e=>(0,p.jsx)(`li`,{children:e},e))})]})}function fe({guide:e}){let t=w[(w.findIndex(t=>t.id===e.id)+1)%w.length];return(0,p.jsxs)(v,{active:`architecture`,children:[(0,p.jsx)(y,{kicker:e.subtitle,title:e.title,copy:e.prompt,children:(0,p.jsx)(`div`,{className:`hero-pill-row`,children:e.priorities.map(e=>(0,p.jsx)(`span`,{children:e},e))})}),(0,p.jsxs)(`section`,{className:`section arch-detail-layout`,children:[(0,p.jsxs)(`aside`,{className:`detail-toc`,children:[(0,p.jsx)(`a`,{href:`/architecture/`,children:`← Architecture home`}),(0,p.jsx)(`p`,{children:`On this page`}),(0,p.jsx)(`a`,{href:`#clarify`,children:`Clarify`}),(0,p.jsx)(`a`,{href:`#numbers`,children:`Scale`}),(0,p.jsx)(`a`,{href:`#contract`,children:`Contract`}),(0,p.jsx)(`a`,{href:`#flow`,children:`Data flow`}),(0,p.jsx)(`a`,{href:`#components`,children:`Components`}),(0,p.jsx)(`a`,{href:`#tradeoffs`,children:`Trade-offs`}),(0,p.jsx)(`a`,{href:`#failures`,children:`Failures`})]}),(0,p.jsxs)(`article`,{className:`arch-detail-content`,children:[(0,p.jsxs)(`section`,{className:`prompt-card`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Start here—before looking below`}),(0,p.jsx)(`h2`,{children:e.prompt}),(0,p.jsx)(`p`,{children:`Take five minutes to ask questions and name priorities aloud. Then use the guide to fill gaps, not to memorize one “correct” architecture.`})]}),(0,p.jsx)(de,{id:`clarify`,kicker:`Step 1`,title:`Clarifying questions`,items:e.clarify}),(0,p.jsx)(de,{id:`numbers`,kicker:`Step 2`,title:`Back-of-the-envelope scale`,items:e.scale}),(0,p.jsxs)(`section`,{className:`contract-grid`,id:`contract`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 3 · API`}),(0,p.jsx)(`h2`,{children:`Define the contract`}),e.api.map(e=>(0,p.jsx)(`code`,{children:e},e))]}),(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 3 · Data`}),(0,p.jsx)(`h2`,{children:`Name ownership`}),e.data.map(e=>(0,p.jsx)(`p`,{children:e},e))]})]}),(0,p.jsxs)(`section`,{className:`flow-section`,id:`flow`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 4`}),(0,p.jsx)(`h2`,{children:`Walk the critical path`}),(0,p.jsx)(`ol`,{children:e.flow.map((e,t)=>(0,p.jsxs)(`li`,{children:[(0,p.jsx)(`span`,{children:t+1}),(0,p.jsx)(`p`,{children:e})]},e))})]}),(0,p.jsxs)(`section`,{className:`component-section`,id:`components`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 5`}),(0,p.jsx)(`h2`,{children:`Make every box earn its place`}),(0,p.jsx)(`div`,{className:`component-grid`,children:e.components.map(e=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`h3`,{children:e.name}),(0,p.jsx)(`strong`,{children:e.purpose}),(0,p.jsx)(`p`,{children:e.why})]},e.name))})]}),(0,p.jsxs)(`section`,{className:`tradeoff-section`,id:`tradeoffs`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 6`}),(0,p.jsx)(`h2`,{children:`Say both sides of the decision`}),e.decisions.map(e=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`h3`,{children:e.question}),(0,p.jsxs)(`div`,{children:[(0,p.jsxs)(`p`,{children:[(0,p.jsx)(`span`,{children:`A`}),e.optionA]}),(0,p.jsxs)(`p`,{children:[(0,p.jsx)(`span`,{children:`B`}),e.optionB]})]}),(0,p.jsx)(`strong`,{children:e.guidance})]},e.question))]}),(0,p.jsxs)(`section`,{className:`failure-section`,id:`failures`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 7`}),(0,p.jsx)(`h2`,{children:`Pressure-test the design`}),(0,p.jsx)(`div`,{children:e.failures.map(e=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`h3`,{children:e.failure}),(0,p.jsx)(`p`,{children:e.response})]},e.failure))})]}),(0,p.jsxs)(`section`,{className:`deep-dive`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`If the interviewer goes deeper`}),(0,p.jsx)(`h2`,{children:`Be ready to explore`}),(0,p.jsx)(`div`,{children:e.depth.map(e=>(0,p.jsx)(`span`,{children:e},e))})]})]})]}),(0,p.jsx)(`nav`,{className:`next-guide single`,children:(0,p.jsxs)(`a`,{href:`/architecture/${t.id}/`,children:[(0,p.jsx)(`small`,{children:`Next case study`}),(0,p.jsxs)(`strong`,{children:[t.title,` →`]})]})})]})}function pe(){return(0,p.jsxs)(v,{active:`architecture`,children:[(0,p.jsx)(b,{label:`System design review`,title:`Architecture`,reminder:`Do not draw boxes yet. Clarify reads, writes, scale, latency, consistency, and failure behavior first; then make every component earn its place.`,cues:[`clarify`,`estimate`,`contract`,`critical path`,`trade-offs`,`failures`]}),(0,p.jsxs)(`section`,{className:`section architecture-principle`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`The central habit`}),(0,p.jsxs)(`blockquote`,{children:[`“This component provides `,(0,p.jsx)(`em`,{children:`this capability`}),`, protects `,(0,p.jsx)(`em`,{children:`this requirement`}),`, and costs us `,(0,p.jsx)(`em`,{children:`this trade-off`}),`.”`]}),(0,p.jsx)(`p`,{children:`Avoid using “add a cache,” “use Kafka,” or “put it in DynamoDB” as complete answers. Describe the required behavior first; technologies are examples, not reasoning.`})]}),(0,p.jsxs)(`section`,{className:`section interview-timeline`,children:[(0,p.jsxs)(`div`,{className:`section-heading compact-heading`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`A 60-minute shape`}),(0,p.jsx)(`h2`,{children:`Keep moving while leaving room for depth.`})]}),(0,p.jsx)(`div`,{className:`timeline-grid`,children:re.map(e=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`span`,{children:e.minutes}),(0,p.jsx)(`h3`,{children:e.title}),(0,p.jsx)(`p`,{children:e.detail})]},e.minutes))})]}),(0,p.jsxs)(`section`,{className:`section foundation-section`,children:[(0,p.jsxs)(`div`,{className:`section-heading compact-heading`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Six lenses`}),(0,p.jsx)(`h2`,{children:`A framework you can reuse for any prompt.`})]}),(0,p.jsx)(`div`,{className:`foundation-grid`,children:ae.map((e,t)=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`span`,{children:String(t+1).padStart(2,`0`)}),(0,p.jsx)(`h3`,{children:e.title}),(0,p.jsx)(`strong`,{children:e.prompt}),(0,p.jsx)(`ul`,{children:e.points.map(e=>(0,p.jsx)(`li`,{children:e},e))})]},e.title))})]}),(0,p.jsxs)(`section`,{className:`section case-study-section`,children:[(0,p.jsxs)(`div`,{className:`section-heading pattern-heading`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Practice prompts`}),(0,p.jsx)(`h2`,{children:`Common systems, deeply explained`})]}),(0,p.jsx)(`p`,{children:`Start with the prompt, speak your clarifying questions aloud, then compare your path to the guide.`})]}),(0,p.jsx)(`div`,{className:`case-grid`,children:w.map((e,t)=>(0,p.jsxs)(`a`,{className:`case-card`,href:`/architecture/${e.id}/`,children:[(0,p.jsx)(`span`,{children:String(t+1).padStart(2,`0`)}),(0,p.jsx)(`p`,{children:e.subtitle}),(0,p.jsx)(`h3`,{children:e.title}),(0,p.jsx)(`ul`,{children:e.priorities.slice(0,3).map(e=>(0,p.jsx)(`li`,{children:e},e))}),(0,p.jsx)(`strong`,{children:`Open case study →`})]},e.id))})]}),(0,p.jsxs)(`section`,{className:`section pressure-section`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Pressure-test every design`}),(0,p.jsx)(`h2`,{children:`Failure is part of the architecture.`})]}),(0,p.jsx)(`div`,{className:`pressure-grid`,children:[`What times out?`,`What retries—and can it duplicate effects?`,`What becomes stale?`,`What is the source of truth?`,`Where does backpressure appear?`,`What is the hot key or hot partition?`,`What does the client observe?`,`How will an operator know?`,`How is it rolled back?`].map(e=>(0,p.jsx)(`p`,{children:e},e))})]})]})}var me=[{id:`ds-01`,category:`Data structures`,question:`What is the average lookup time for a Ruby Hash?`,answer:`O(1) average.`,detail:`Worst case can degrade, but O(1) average is the interview assumption for well-distributed keys.`},{id:`ds-02`,category:`Data structures`,question:`What operations make a Ruby Array work as a stack in this guide?`,answer:`array.append(item) and array.pop.`,detail:`Both operate at the end and are O(1) amortized. We consistently use append rather than another Ruby alias because it matches Python's vocabulary.`},{id:`ds-03`,category:`Data structures`,question:`Why avoid Array#shift in a BFS hot loop?`,answer:`It is O(n) because later elements must move.`,detail:`Keep a head index into the array instead.`},{id:`ds-04`,category:`Data structures`,question:`What does the root of a min-heap guarantee?`,answer:`It is the globally smallest item.`,detail:`The rest of the heap is only partially ordered, not fully sorted.`},{id:`ds-05`,category:`Data structures`,question:`What are the child indexes of heap node i?`,answer:`Left = 2*i + 1; right = 2*i + 2.`,detail:`The parent index is (i - 1) / 2 using integer division.`},{id:`ds-06`,category:`Data structures`,question:`When is a Set preferable to a Hash?`,answer:`When you need unique items or membership checks, but no value associated with each item.`,detail:`In Ruby 3.2, Set is built in and autoloaded. Use Set.new, set.add(item), and set.include?(item); no import is needed.`},{id:`ds-07`,category:`Data structures`,question:`What does a queue guarantee?`,answer:`First in, first out (FIFO).`,detail:`That ordering makes BFS visit states by increasing unweighted distance.`},{id:`ds-08`,category:`Data structures`,question:`What is a graph adjacency list?`,answer:`A mapping from each node to its neighbors.`,detail:`It uses O(V + E) space and is usually best for sparse graphs.`},{id:`ds-09`,category:`Data structures`,question:`What is a linked-list sentinel node for?`,answer:`It removes special cases around the head.`,detail:`Attach real nodes after a dummy node, then return dummy.next.`},{id:`ds-10`,category:`Data structures`,question:`What does union-find efficiently track?`,answer:`Which items belong to the same connected group as new links are added.`,detail:`If A joins B and B joins C, union-find can quickly answer that A and C are connected. The formal name for these separate groups is disjoint sets. Path compression and union by size keep repeated lookups extremely fast.`},{id:`pt-01`,category:`Patterns`,question:`What is the key signal for a sliding window?`,answer:`A question about a contiguous range whose state updates as endpoints move.`,detail:`Common wording: longest, shortest, or count of valid subarrays/substrings.`},{id:`pt-02`,category:`Patterns`,question:`What must justify every two-pointer move?`,answer:`A fact proving the discarded candidates cannot be answers.`,detail:`Sorted order or a limiting boundary often provides that proof.`},{id:`pt-03`,category:`Patterns`,question:`When does BFS find a shortest path?`,answer:`When every edge has equal cost.`,detail:`For different nonnegative costs, use a priority-queue approach such as Dijkstra.`},{id:`pt-04`,category:`Patterns`,question:`What are the three backtracking actions?`,answer:`Choose, explore, undo.`,detail:`Prune before exploring any partial choice that cannot become valid.`},{id:`pt-05`,category:`Patterns`,question:`What makes binary search on an answer possible?`,answer:`A monotonic feasibility predicate.`,detail:`Once candidate x is feasible, all candidates on one side must also be feasible.`},{id:`pt-06`,category:`Patterns`,question:`What equation gives a range sum from prefix sums?`,answer:`sum(left..right) = prefix[right + 1] - prefix[left].`,detail:`Define prefix[i] as the sum of elements before index i.`},{id:`pt-07`,category:`Patterns`,question:`What question should you answer before writing recursive tree code?`,answer:`What does this function return for the subtree rooted here?`,detail:`That contract determines the base case and child combination.`},{id:`pt-08`,category:`Patterns`,question:`What does a topological sort produce?`,answer:`An order where every directed prerequisite appears before its dependent.`,detail:`If not all nodes can be processed, the graph contains a directed cycle.`},{id:`pt-09`,category:`Patterns`,question:`What is the main signal for dynamic programming?`,answer:`Repeated subproblems plus a compact state.`,detail:`DP commonly answers optimization, counting, or feasibility questions.`},{id:`pt-10`,category:`Patterns`,question:`What must a greedy solution include besides a local rule?`,answer:`A proof the local choice cannot hurt the optimum.`,detail:`An exchange argument or stays-ahead argument is common.`},{id:`pt-11`,category:`Patterns`,question:`What does a monotonic stack usually store?`,answer:`Unresolved candidates in increasing or decreasing order.`,detail:`Each item is appended and popped at most once, yielding O(n) total work.`},{id:`pt-12`,category:`Patterns`,question:`When should you reach for a heap?`,answer:`When you repeatedly need the current minimum or maximum as data changes.`,detail:`Typical examples are top K, scheduling, and merging sorted streams.`},{id:`pt-13`,category:`Patterns`,question:`Why sort intervals before merging?`,answer:`Only the last merged interval can overlap the next interval.`,detail:`Sorting converts a global overlap problem into local comparisons.`},{id:`pt-14`,category:`Patterns`,question:`How do slow and fast pointers detect a linked-list cycle?`,answer:`Fast eventually laps slow if a cycle exists.`,detail:`Compare node identity, not node values.`},{id:`pt-15`,category:`Patterns`,question:`When do negative numbers break a variable-sum sliding window?`,answer:`When moving an endpoint no longer changes the sum monotonically.`,detail:`Prefix sums plus a hash often handle target sums with negatives.`},{id:`cr-01`,category:`Complexity & Ruby`,question:`What is the time complexity of comparison sorting?`,answer:`O(n log n) for standard comparison sorts.`,detail:`Ruby's sort and sort_by should be described as O(n log n).`},{id:`cr-02`,category:`Complexity & Ruby`,question:`What is the complexity of a graph DFS or BFS?`,answer:`O(V + E) time.`,detail:`Each vertex and edge is processed a constant number of times.`},{id:`cr-03`,category:`Complexity & Ruby`,question:`How do you derive basic DP time complexity?`,answer:`Number of states × transitions per state.`,detail:`State dimensions matter more than whether the code is recursive or iterative.`},{id:`cr-04`,category:`Complexity & Ruby`,question:`What does Hash.new(0) enable?`,answer:`Frequency counting without checking for missing keys.`,detail:`counts[item] += 1 works because missing keys read as zero.`},{id:`cr-05`,category:`Complexity & Ruby`,question:`Why is Hash.new([]) dangerous?`,answer:`Every missing key returns the same mutable array.`,detail:`Use Hash.new { |hash, key| hash[key] = [] }.`},{id:`cr-06`,category:`Complexity & Ruby`,question:`What Ruby 3.2 class creates small immutable value objects?`,answer:`Data.define.`,detail:`Use Struct instead when member writers or mutable container behavior are required.`},{id:`cr-07`,category:`Complexity & Ruby`,question:`How do you compare compound keys in Ruby?`,answer:`Use arrays, such as [time, sequence] <=> [other_time, other_sequence].`,detail:`Array comparison is lexicographic and is useful for deterministic tie-breaks.`},{id:`cr-08`,category:`Complexity & Ruby`,question:`How do you copy a mutable backtracking path?`,answer:`path.dup.`,detail:`Saving path itself would store multiple references to one changing array.`},{id:`cr-09`,category:`Complexity & Ruby`,question:`What do (0...n) and (0..n) mean?`,answer:`Three dots exclude n; two dots include n.`,detail:`Exclusive ranges are common for array indexes.`},{id:`cr-10`,category:`Complexity & Ruby`,question:`Why prefer iteration over deep recursion in Ruby?`,answer:`Ruby has a relatively limited call stack.`,detail:`A highly skewed tree or deep graph can cause SystemStackError.`},{id:`ar-01`,category:`Architecture`,question:`What should you do before drawing a system?`,answer:`Clarify functional requirements, scale, and quality priorities.`,detail:`The architecture depends on which features and trade-offs actually matter.`},{id:`ar-02`,category:`Architecture`,question:`What are the four main quality dimensions in this interview?`,answer:`Scalability, latency, performance, and failure handling.`,detail:`Tie every major design choice back to one or more of these.`},{id:`ar-03`,category:`Architecture`,question:`What is horizontal scaling?`,answer:`Adding more service instances rather than making one machine larger.`,detail:`It usually requires stateless request handling or externalized session state.`},{id:`ar-04`,category:`Architecture`,question:`Why cache data?`,answer:`To reduce latency and load on a slower source.`,detail:`Always discuss invalidation, staleness, misses, and cache failure.`},{id:`ar-05`,category:`Architecture`,question:`When should work move to a queue?`,answer:`When it can complete asynchronously or needs buffering/retries.`,detail:`Queues decouple producers and consumers but add delay and duplicate-delivery concerns.`},{id:`ar-06`,category:`Architecture`,question:`What makes a retried operation safe?`,answer:`Idempotency: repeating it has the same effect as doing it once.`,detail:`Use an idempotency key or durable operation identity.`},{id:`ar-07`,category:`Architecture`,question:`What does at-least-once delivery imply?`,answer:`A message may be delivered more than once.`,detail:`Consumers must deduplicate or make processing idempotent.`},{id:`ar-08`,category:`Architecture`,question:`What is replication primarily for?`,answer:`Availability, durability, and sometimes read scaling.`,detail:`It introduces replication lag and consistency trade-offs.`},{id:`ar-09`,category:`Architecture`,question:`What is partitioning or sharding?`,answer:`Splitting a dataset across machines by a partition key.`,detail:`Discuss hot keys, rebalancing, and cross-partition operations.`},{id:`ar-10`,category:`Architecture`,question:`What is backpressure?`,answer:`Slowing or rejecting producers when consumers cannot keep up.`,detail:`Without it, queues and memory can grow until the system fails.`},{id:`ar-11`,category:`Architecture`,question:`What is a good first API discussion?`,answer:`Core operations, request/response shape, pagination, and idempotency.`,detail:`The API clarifies system boundaries before components are chosen.`},{id:`ar-12`,category:`Architecture`,question:`What should an observability plan include?`,answer:`Metrics, logs, traces, and actionable alerts.`,detail:`Name service-level signals such as error rate, latency, saturation, and queue age.`},{id:`ar-13`,category:`Architecture`,question:`What is the CAP trade-off during a network partition?`,answer:`Choose consistency or availability for a given operation.`,detail:`Do not describe an entire system as simply CP or AP; requirements differ by operation.`},{id:`ar-14`,category:`Architecture`,question:`Why use a CDN for media?`,answer:`To serve cached bytes near users and offload origin traffic.`,detail:`Uploads still need durable origin storage, authorization, and processing.`},{id:`ar-15`,category:`Architecture`,question:`Why should you avoid naming a tool as the whole design?`,answer:`A product name does not explain the capability, data flow, or trade-off.`,detail:`Say what the component must guarantee and why, then offer an implementation example.`}],O=[`All`,`Data structures`,`Patterns`,`Complexity & Ruby`,`Architecture`],k=(e,t)=>({label:e,href:t}),he={"ds-01":k(`Arrays, Hashes & Sets`,`/algorithms/arrays-hashes/`),"ds-02":k(`Stacks`,`/algorithms/stack/`),"ds-03":k(`Queues & BFS`,`/algorithms/queue-bfs/`),"ds-04":k(`Heaps`,`/algorithms/heap/`),"ds-05":k(`Heaps`,`/algorithms/heap/`),"ds-06":k(`Arrays, Hashes & Sets`,`/algorithms/arrays-hashes/`),"ds-07":k(`Queues & BFS`,`/algorithms/queue-bfs/`),"ds-08":k(`Graphs`,`/algorithms/graphs/`),"ds-09":k(`Linked Lists`,`/algorithms/linked-lists/`),"ds-10":k(`Union-Find from first principles`,`/algorithms/union-find/#primer`),"pt-01":k(`Sliding Window`,`/algorithms/sliding-window/`),"pt-02":k(`Two Pointers`,`/algorithms/two-pointers/`),"pt-03":k(`Queues & BFS`,`/algorithms/queue-bfs/`),"pt-04":k(`Backtracking`,`/algorithms/backtracking/`),"pt-05":k(`Binary Search`,`/algorithms/binary-search/`),"pt-06":k(`Prefix Sums`,`/algorithms/prefix-sums/`),"pt-07":k(`Trees`,`/algorithms/trees/`),"pt-08":k(`Graphs & Topological Sort`,`/algorithms/graphs/`),"pt-09":k(`Dynamic Programming`,`/algorithms/dynamic-programming/`),"pt-10":k(`Sorting & Greedy`,`/algorithms/sorting-greedy/`),"pt-11":k(`Monotonic Stacks`,`/algorithms/stack/`),"pt-12":k(`Heaps`,`/algorithms/heap/`),"pt-13":k(`Intervals`,`/algorithms/intervals/`),"pt-14":k(`Linked Lists`,`/algorithms/linked-lists/`),"pt-15":k(`Prefix Sums`,`/algorithms/prefix-sums/`),"cr-01":k(`Sorting & Greedy`,`/algorithms/sorting-greedy/`),"cr-02":k(`Graphs`,`/algorithms/graphs/`),"cr-03":k(`Dynamic Programming`,`/algorithms/dynamic-programming/`),"cr-04":k(`Arrays, Hashes & Sets`,`/algorithms/arrays-hashes/`),"cr-05":k(`Arrays, Hashes & Sets`,`/algorithms/arrays-hashes/`),"cr-06":k(`Ruby glossary`,`/ruby/`),"cr-07":k(`Ruby glossary`,`/ruby/`),"cr-08":k(`Backtracking`,`/algorithms/backtracking/`),"cr-09":k(`Ruby glossary`,`/ruby/`),"cr-10":k(`Trees & iterative DFS`,`/algorithms/trees/`),"ar-01":k(`Architecture framework`,`/architecture/`),"ar-02":k(`Architecture framework`,`/architecture/`),"ar-03":k(`Architecture framework`,`/architecture/`),"ar-04":k(`Social Feed case study`,`/architecture/social-feed/`),"ar-05":k(`Job Queue case study`,`/architecture/job-queue/`),"ar-06":k(`Job Queue case study`,`/architecture/job-queue/`),"ar-07":k(`Job Queue case study`,`/architecture/job-queue/`),"ar-08":k(`Architecture framework`,`/architecture/`),"ar-09":k(`Social Feed case study`,`/architecture/social-feed/`),"ar-10":k(`Job Queue case study`,`/architecture/job-queue/`),"ar-11":k(`Architecture framework`,`/architecture/`),"ar-12":k(`Architecture framework`,`/architecture/`),"ar-13":k(`Architecture trade-offs`,`/architecture/`),"ar-14":k(`Media Platform case study`,`/architecture/media-platform/`),"ar-15":k(`Architecture framework`,`/architecture/`)},ge=T.map(e=>({id:`lc-${e.id}`,category:`Problem drills`,question:e.prompt,answer:`#${e.number} ${e.title}`,detail:`Approach: ${e.approach}. Pattern: ${e.pattern}. Time: ${e.time}. Auxiliary space: ${e.space}.`})),_e=Object.fromEntries(T.map(e=>[`lc-${e.id}`,k(`${e.title} discussion`,`/problems/${e.id}/`)])),ve=`reprime-flashcards-v1`,ye=1440*60*1e3,be=[0,0,1,3,7,14],xe=[...me,...ge],Se=Object.fromEntries(xe.map(e=>[e.id,e]));function Ce(){try{return JSON.parse(localStorage.getItem(ve)||`{}`)}catch{return{}}}function we(e,t){let n=e===`problems`?ge:me;return e===`fundamentals`&&t!==`All`?n.filter(e=>e.category===t):n}function Te(e,t,n){let r=Date.now();return we(t,n).filter(t=>!e[t.id]||e[t.id].dueAt<=r).sort((t,n)=>(e[t.id]?.dueAt??0)-(e[n.id]?.dueAt??0)).map(e=>e.id)}function Ee(e){let t=new URLSearchParams(window.location.search),n=t.get(`deck`)===`problems`?`problems`:`fundamentals`,r=t.get(`problem`),i=r?`lc-${r}`:void 0;return{deck:n,queue:i&&Se[i]?[i]:Te(e,n,`All`)}}function De(){let e=(0,f.useMemo)(()=>Ce(),[]),t=(0,f.useMemo)(()=>Ee(e),[e]),[n,r]=(0,f.useState)(e),[i,a]=(0,f.useState)(t.deck),[o,s]=(0,f.useState)(`All`),[c,l]=(0,f.useState)(t.queue),[u,d]=(0,f.useState)(!1),[m,h]=(0,f.useState)(0),[g,_]=(0,f.useState)(0),y=c[0]?Se[c[0]]:void 0,x=y?he[y.id]||_e[y.id]:void 0,ee=(0,f.useMemo)(()=>{let e=new Set(we(i,`All`).map(e=>e.id)),t=Object.entries(n).filter(([t])=>e.has(t)).map(([,e])=>e);return{seen:t.length,mastered:t.filter(e=>e.box>=4).length,due:Te(n,i,`All`).length}},[n,i]),te=e=>{r(e),localStorage.setItem(ve,JSON.stringify(e))},S=(e,t=`All`,r=!1)=>{a(e),s(t);let i=we(e,t);l(r?i.map(e=>e.id):Te(n,e,t)),d(!1),h(0),_(0)},C=e=>{if(!y)return;let t=n[y.id]||{box:1,dueAt:0,correct:0,incorrect:0},r=e?Math.min(5,t.box+1):1;te({...n,[y.id]:{box:r,dueAt:e?Date.now()+be[r]*ye:Date.now(),correct:t.correct+ +!!e,incorrect:t.incorrect+ +!e}}),e?(l(e=>e.slice(1)),h(e=>e+1)):(l(e=>{let t=e.slice(1),n=Math.min(3,t.length);return[...t.slice(0,n),y.id,...t.slice(n)]}),_(e=>e+1)),d(!1)};return(0,f.useEffect)(()=>{let e=e=>{e.target instanceof HTMLSelectElement||e.target instanceof HTMLButtonElement||(e.code===`Space`&&(e.preventDefault(),d(!0)),u&&e.key===`1`&&C(!1),u&&e.key===`2`&&C(!0))};return window.addEventListener(`keydown`,e),()=>window.removeEventListener(`keydown`,e)}),(0,p.jsxs)(v,{active:`flashcards`,children:[(0,p.jsx)(b,{label:`Active recall · Leitner system`,title:`Flashcards`,reminder:`Commit to an answer before revealing it. If the approach or complexity felt fuzzy, choose Again—even if you were close.`,cues:[`say it aloud`,`include auxiliary space`,`Again is useful data`]}),(0,p.jsxs)(`section`,{className:`flash-section`,children:[(0,p.jsxs)(`aside`,{className:`flash-sidebar`,children:[(0,p.jsxs)(`div`,{className:`flash-primary-controls`,children:[(0,p.jsxs)(`div`,{className:`deck-switcher`,"aria-label":`Flashcard deck`,children:[(0,p.jsxs)(`button`,{type:`button`,"aria-pressed":i===`fundamentals`,className:i===`fundamentals`?`active`:``,onClick:()=>S(`fundamentals`),children:[`Fundamentals`,(0,p.jsx)(`span`,{children:`50 cards`})]}),(0,p.jsxs)(`button`,{type:`button`,"aria-pressed":i===`problems`,className:i===`problems`?`active`:``,onClick:()=>S(`problems`),children:[`Problem drills`,(0,p.jsxs)(`span`,{children:[ge.length,` cards`]})]})]}),(0,p.jsxs)(`div`,{className:`flash-stats`,"aria-label":`Deck progress`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`strong`,{children:ee.due}),(0,p.jsx)(`span`,{children:`Due now`})]}),(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`strong`,{children:ee.seen}),(0,p.jsx)(`span`,{children:`Seen`})]}),(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`strong`,{children:ee.mastered}),(0,p.jsx)(`span`,{children:`Box 4+`})]})]}),i===`fundamentals`?(0,p.jsxs)(`label`,{className:`filter-label`,children:[`Category`,(0,p.jsx)(`select`,{value:o,onChange:e=>S(i,e.target.value),children:O.map(e=>(0,p.jsx)(`option`,{children:e},e))})]}):(0,p.jsxs)(`div`,{className:`problem-deck-note`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Before revealing`}),(0,p.jsx)(`p`,{children:`Name the pattern, concrete approach, time, and auxiliary space.`})]})]}),(0,p.jsxs)(`div`,{className:`flash-secondary-controls`,children:[(0,p.jsxs)(`details`,{className:`leitner-explainer`,children:[(0,p.jsx)(`summary`,{children:`How repetition works`}),(0,p.jsxs)(`ol`,{children:[(0,p.jsxs)(`li`,{children:[(0,p.jsx)(`strong`,{children:`Again`}),` → Box 1, repeat shortly.`]}),(0,p.jsxs)(`li`,{children:[(0,p.jsx)(`strong`,{children:`Got it`}),` → advance one box.`]}),(0,p.jsx)(`li`,{children:`Higher boxes wait 1, 3, 7, then 14 days.`})]})]}),(0,p.jsx)(`button`,{type:`button`,className:`quiet-button`,onClick:()=>{window.confirm(`Reset all flashcard progress on this device?`)&&(localStorage.removeItem(ve),r({}),l(we(i,o).map(e=>e.id)),d(!1),h(0),_(0))},children:`Reset progress`})]})]}),(0,p.jsxs)(`div`,{className:`flash-workspace`,children:[(0,p.jsxs)(`div`,{className:`session-bar`,"aria-live":`polite`,children:[(0,p.jsxs)(`span`,{children:[c.length,` cards remaining`]}),(0,p.jsxs)(`span`,{children:[m,` correct · `,g,` again`]})]}),y?(0,p.jsxs)(`article`,{className:`flash-card ${u?`revealed`:``}`,children:[(0,p.jsxs)(`div`,{className:`flash-card-meta`,children:[(0,p.jsx)(`span`,{children:y.category}),(0,p.jsxs)(`span`,{children:[`Box `,n[y.id]?.box||1]})]}),(0,p.jsxs)(`div`,{className:`flash-question`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Question`}),(0,p.jsx)(`h2`,{children:y.question})]}),u?(0,p.jsxs)(`div`,{className:`flash-answer`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Answer`}),(0,p.jsx)(`h3`,{children:y.answer}),(0,p.jsx)(`p`,{children:y.detail}),x&&(0,p.jsxs)(`a`,{className:`flash-study-link`,href:x.href,target:`_blank`,rel:`noreferrer`,children:[(0,p.jsx)(`span`,{children:`Need more context?`}),(0,p.jsxs)(`strong`,{children:[`Study `,x.label,` ↗`]})]})]}):(0,p.jsxs)(`button`,{type:`button`,className:`reveal-button`,onClick:()=>d(!0),children:[`Reveal answer `,(0,p.jsx)(`kbd`,{children:`space`})]}),u&&(0,p.jsxs)(`div`,{className:`grade-buttons`,children:[(0,p.jsxs)(`button`,{type:`button`,className:`again-button`,onClick:()=>C(!1),children:[(0,p.jsx)(`span`,{children:`1`}),` Again`,(0,p.jsx)(`small`,{children:`Repeat after 3 cards`})]}),(0,p.jsxs)(`button`,{type:`button`,className:`got-button`,onClick:()=>C(!0),children:[(0,p.jsx)(`span`,{children:`2`}),` Got it`,(0,p.jsx)(`small`,{children:`Move to the next box`})]})]})]}):(0,p.jsxs)(`div`,{className:`session-complete`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Session complete`}),(0,p.jsx)(`h2`,{children:`Nothing else is due in this deck.`}),(0,p.jsxs)(`p`,{children:[`You marked `,m,` cards correct and sent `,g,` answers back for repetition.`]}),(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`button`,{className:`primary-button`,onClick:()=>S(i,o),children:`Check due cards`}),(0,p.jsx)(`button`,{className:`outline-button`,onClick:()=>S(i,o,!0),children:`Review this deck anyway`})]})]}),(0,p.jsxs)(`p`,{className:`keyboard-note`,children:[`Keyboard: `,(0,p.jsx)(`kbd`,{children:`space`}),` reveal · `,(0,p.jsx)(`kbd`,{children:`1`}),` again · `,(0,p.jsx)(`kbd`,{children:`2`}),` got it`]})]})]})]})}var Oe=[{task:`Add one array item`,use:`items.append(item)`,avoid:`items << item · items.push(item)`,reason:`append matches Python and reads clearly at interview speed.`},{task:`Remove the final array item`,use:`items.pop`,avoid:`items.pop(1)`,reason:`pop matches Python and naturally pairs with append for stacks.`},{task:`Keep matching items`,use:`items.filter { |item| valid?(item) }`,avoid:`items.select { ... } · items.find_all { ... }`,reason:`filter matches Python and describes the result directly.`},{task:`Transform every item`,use:`items.map { |item| transform(item) }`,avoid:`items.collect { ... }`,reason:`map is shared vocabulary across Ruby and Python.`},{task:`Find the first match`,use:`items.find { |item| valid?(item) }`,avoid:`items.detect { ... }`,reason:`find is the clearer, more portable name.`},{task:`Sum numeric items`,use:`items.sum`,avoid:`items.inject(0, :+) · items.reduce(0, :+)`,reason:`sum matches Python and states the operation without machinery.`},{task:`Test collection membership`,use:`items.include?(item)`,avoid:`items.member?(item)`,reason:`Ruby has no in operator; include? is the clearest native spelling.`},{task:`Store unique items`,use:`set = Set.new · set.add(item)`,avoid:`require 'set'`,reason:`Ruby 3.2 includes and autoloads Set; add also matches Python's vocabulary.`},{task:`Test hash-key membership`,use:`hash.key?(key)`,avoid:`hash.has_key?(key) · hash.include?(key)`,reason:`key? is explicit and distinguishes keys from values.`},{task:`Iterate with an index`,use:`items.each_with_index do |item, index|`,avoid:`items.each.with_index do |item, index|`,reason:`Ruby has no enumerate; each_with_index is the standard explicit form.`},{task:`Count array or string elements`,use:`items.length`,avoid:`items.size · items.count`,reason:`length makes the intent unambiguous; count may perform work or count matches.`},{task:`Sort without changing the input`,use:`items.sort · items.sort_by { |item| key(item) }`,avoid:`items.sort! · items.sort_by! { ... }`,reason:`Prefer a non-mutating result unless the problem explicitly permits input mutation.`},{task:`Create an immutable value record`,use:`Task = Data.define(:name, :priority)`,avoid:`Struct.new(:name, :priority)`,reason:`Data communicates immutable value semantics in Ruby 3.2.`},{task:`Create a mutable linked node`,use:`Node = Struct.new(:value, :next)`,avoid:`Node = Data.define(:value, :next)`,reason:`Linked-list algorithms rewire next, so the record must be mutable.`},{task:`Use an Array as a queue`,use:`queue.append(item) · item = queue[head] · head += 1`,avoid:`queue.shift`,reason:`append keeps Python-like vocabulary; a head index avoids Ruby's O(n) shift.`}],ke=[[`Shared vocabulary first`,`When Ruby exposes equivalent names, use the one that resembles Python: append, filter, map, find, sum.`],[`Explicit Ruby second`,`When there is no Python-shaped spelling, choose one precise Ruby form and reuse it everywhere.`],[`Mutation is deliberate`,`Prefer non-mutating collection methods unless the problem contract explicitly allows changing the input.`],[`Clarity beats cleverness`,`Use the form you can narrate and debug under interview pressure; terse syntax is not a goal.`]],Ae=`# Array as a stack
+end`}],ne=Object.fromEntries(C.map(e=>[e.id,e])),re=[{minutes:`0–5`,title:`Clarify`,detail:`Users, core actions, scale, consistency, latency, and what is explicitly out of scope.`},{minutes:`5–10`,title:`Estimate`,detail:`Requests/sec, storage growth, read/write ratio, object sizes, and peak multiplier.`},{minutes:`10–18`,title:`Contract`,detail:`Core APIs, data model, identifiers, pagination, idempotency, and authorization boundary.`},{minutes:`18–35`,title:`High-level design`,detail:`Draw the critical read and write paths. Make data ownership and async boundaries explicit.`},{minutes:`35–50`,title:`Deep dive`,detail:`Follow interviewer interest into scale, consistency, hot spots, failure recovery, or one difficult component.`},{minutes:`50–60`,title:`Pressure test`,detail:`Failures, observability, security, cost, rollout, and how the design evolves at 10× scale.`}],w=[{id:`social-feed`,title:`Social Feed`,subtitle:`Twitter / Instagram-style timelines`,prompt:`Design a service where users publish posts and read a ranked or chronological home feed.`,priorities:[`Fast feed reads`,`High write fan-out tolerance`,`Freshness`,`Celebrity hot spots`,`Eventual consistency is usually acceptable`],clarify:[`Chronological or ranked feed?`,`Following limit and expected follower distribution?`,`Text only or media references?`,`How fresh must a new post appear?`,`Do deletes/blocks need immediate enforcement?`],scale:[`Estimate daily active users and feed opens per user.`,`Model posts/sec separately from feed reads/sec; reads usually dominate.`,`Call out skew: a tiny set of authors may have millions of followers.`,`Estimate feed-entry storage, not only post-body storage.`],api:[`POST /posts {body, media_ids, idempotency_key}`,`GET /feed?cursor=...&limit=...`,`PUT /follows/:user_id`,`DELETE /posts/:post_id`],data:[`Post(post_id, author_id, body, created_at, visibility)`,`Follow(follower_id, followee_id, created_at)`,`FeedEntry(user_id, rank/time, post_id)`,`Use opaque cursor pagination; offsets become unstable and expensive.`],flow:[`Write post durably and return its ID.`,`Publish a post-created event.`,`Fan-out workers insert feed entries for ordinary authors.`,`Feed reads merge precomputed entries with on-read posts from high-follower authors.`,`Hydrate post/author data and enforce current visibility before returning.`],components:[{name:`Post service`,purpose:`Own post lifecycle and visibility`,why:`Keeps the source of truth separate from derived feeds.`},{name:`Social graph store`,purpose:`Resolve followers/followees`,why:`Relationship access patterns differ from post storage.`},{name:`Event log + workers`,purpose:`Buffer and distribute fan-out work`,why:`A post should not synchronously update thousands of feeds.`},{name:`Feed store/cache`,purpose:`Serve ordered post IDs quickly`,why:`Precomputation trades write work for low read latency.`}],decisions:[{question:`When is a feed assembled?`,optionA:`Fan-out on write: fast reads, expensive writes.`,optionB:`Fan-out on read: cheap writes, expensive reads.`,guidance:`Use a hybrid: precompute normal authors; merge celebrity posts at read time.`},{question:`How fresh must feeds be?`,optionA:`Synchronous propagation for immediate visibility.`,optionB:`Async propagation for resilience and throughput.`,guidance:`Usually async within seconds; allow an author's own new post to be overlaid immediately.`}],failures:[{failure:`Fan-out workers lag`,response:`Track oldest event age; autoscale consumers; degrade to on-read merge for freshness.`},{failure:`Duplicate post event`,response:`Make FeedEntry insertion idempotent with a unique (user_id, post_id) key.`},{failure:`Post deleted after fan-out`,response:`Treat feed entries as references; enforce visibility during hydration and clean asynchronously.`},{failure:`Celebrity creates a hot partition`,response:`Avoid per-follower synchronous writes; partition work and use on-read merge.`}],depth:[`Ranking signals and model versioning`,`Block/privacy enforcement`,`Feed cache invalidation`,`Backfill after follow`,`Multi-region read locality`]},{id:`realtime-chat`,title:`Realtime Chat`,subtitle:`Slack-style channels and direct messages`,prompt:`Design persistent group chat with real-time delivery, history, presence, and multiple devices per user.`,priorities:[`Low delivery latency`,`Durable history`,`Per-conversation ordering`,`Offline catch-up`,`Connection management`],clarify:[`Direct messages, channels, or both?`,`Maximum room size?`,`Exactly what ordering is promised?`,`Read receipts, typing, presence, edits, attachments?`,`How long is history retained?`],scale:[`Estimate concurrently connected clients, not only requests/sec.`,`Separate durable messages from ephemeral presence/typing events.`,`Estimate messages/sec, average recipients, and bytes/message.`,`Model reconnect bursts after regional/network events.`],api:[`POST /conversations/:id/messages {client_message_id, body}`,`GET /conversations/:id/messages?before=cursor`,`WebSocket/SSE stream for delivery events`,`POST /conversations/:id/read_cursor`],data:[`Conversation(conversation_id, type, created_at)`,`Membership(conversation_id, user_id, role)`,`Message(conversation_id, sequence, message_id, sender_id, body)`,`ReadCursor(user_id, conversation_id, sequence)`],flow:[`Authenticate a long-lived connection at a gateway.`,`On send, authorize membership and deduplicate client_message_id.`,`Assign a conversation-local sequence and durably append the message.`,`Publish delivery events to gateways holding recipient connections.`,`Offline devices resume from their last durable sequence.`],components:[{name:`Connection gateways`,purpose:`Own WebSocket/SSE sessions`,why:`Long-lived connections scale and fail differently from stateless APIs.`},{name:`Message service`,purpose:`Authorize and durably order messages`,why:`Acknowledgment should mean the message can be recovered.`},{name:`Conversation event stream`,purpose:`Distribute messages to online recipients`,why:`Decouples persistence from fan-out and absorbs bursts.`},{name:`Presence service`,purpose:`Track short-lived online state`,why:`Presence can be lossy and should not burden the durable message path.`}],decisions:[{question:`What ordering is guaranteed?`,optionA:`Global total order: simple semantics, major bottleneck.`,optionB:`Per-conversation order: scalable and matches user expectations.`,guidance:`Promise per-conversation server sequence; tolerate cross-conversation reordering.`},{question:`When do we acknowledge send?`,optionA:`After accepting in memory: lower latency, possible loss.`,optionB:`After durable append: slightly slower, clear recovery contract.`,guidance:`Acknowledge durable persistence, then deliver asynchronously.`}],failures:[{failure:`Gateway disconnects`,response:`Clients reconnect to any gateway and resume from last received sequence.`},{failure:`Delivery event duplicated`,response:`Clients deduplicate by message_id or sequence.`},{failure:`Slow consumer`,response:`Bound per-connection buffers, apply backpressure, then force catch-up from history.`},{failure:`Presence store unavailable`,response:`Degrade presence to unknown; do not block durable messaging.`}],depth:[`Message edits and tombstones`,`End-to-end encryption boundaries`,`Large channels`,`Push notifications`,`Multi-device read state`]},{id:`media-platform`,title:`Photo & Media Platform`,subtitle:`Instagram-style upload and delivery`,prompt:`Design image/video upload, processing, storage, and global delivery with user-facing metadata.`,priorities:[`Durability`,`Fast global delivery`,`Large-object throughput`,`Safe async processing`,`Cost control`],clarify:[`Images, video, or both?`,`Maximum sizes and supported formats?`,`Public, private, or shared visibility?`,`Which transformations are required?`,`Upload completion and processing latency targets?`],scale:[`Estimate uploads/day × average original size.`,`Estimate derived variants and retention multiplier.`,`Separate metadata QPS from object bandwidth.`,`Reads likely dwarf writes; model CDN hit ratio.`],api:[`POST /uploads to receive an upload session`,`Direct client upload to object storage using a short-lived signed URL`,`POST /uploads/:id/complete`,`GET /media/:id for metadata and authorized delivery URLs`],data:[`Media(media_id, owner_id, object_key, status, visibility, created_at)`,`Variant(media_id, kind, object_key, width, height, codec)`,`Keep bytes in object storage; keep searchable metadata in a database.`],flow:[`Create an upload session and authorize size/type.`,`Client uploads directly to durable object storage.`,`Completion event triggers malware scan and transformations.`,`Workers write idempotent variants and mark media ready.`,`CDN serves immutable versioned objects near readers.`],components:[{name:`Metadata API`,purpose:`Own media state and authorization`,why:`Small structured records need transactions and queries.`},{name:`Object storage`,purpose:`Durably hold large immutable bytes`,why:`Database blobs are costly and scale poorly for media delivery.`},{name:`Processing queue/workers`,purpose:`Scan, transcode, resize`,why:`CPU-heavy work should not extend request latency.`},{name:`CDN`,purpose:`Cache media close to users`,why:`Reduces origin bandwidth and global read latency.`}],decisions:[{question:`Who receives upload bytes?`,optionA:`API proxy: simpler control, doubles bandwidth and bottlenecks servers.`,optionB:`Direct-to-storage: scalable, requires signed upload lifecycle.`,guidance:`Use direct upload with constrained signed URLs and a completion handshake.`},{question:`How are replacements handled?`,optionA:`Overwrite stable keys: invalidation problems.`,optionB:`Immutable versioned keys: easy caching.`,guidance:`Prefer immutable objects and update metadata references.`}],failures:[{failure:`Client abandons upload`,response:`Expire sessions and garbage-collect unreferenced objects.`},{failure:`Transform worker retries`,response:`Use deterministic variant keys and idempotent status transitions.`},{failure:`CDN serves stale private access`,response:`Use short-lived signed URLs or edge authorization; never rely only on obscure paths.`},{failure:`Corrupt/malicious file`,response:`Quarantine until validation completes; never serve original as ready prematurely.`}],depth:[`Resumable multipart upload`,`Video segmenting`,`Content moderation`,`Lifecycle tiers`,`Regional data residency`]},{id:`ride-hailing`,title:`Ride Hailing`,subtitle:`Uber-style matching and trip state`,prompt:`Design a system that tracks drivers, matches nearby drivers to riders, and maintains a reliable trip lifecycle.`,priorities:[`Fresh geospatial state`,`Low match latency`,`Correct trip transitions`,`Contention control`,`Graceful degradation`],clarify:[`City/region scope and active driver count?`,`Target pickup radius and match latency?`,`Can multiple riders race for one driver?`,`Pricing/payment in scope?`,`How frequently do drivers report location?`],scale:[`Concurrent active drivers × location updates/second.`,`Ride requests/second at peak and geographic concentration.`,`Separate high-volume ephemeral locations from lower-volume durable trips.`,`Model hot events such as airport or stadium exits.`],api:[`PUT /drivers/:id/location {lat, lng, timestamp}`,`POST /ride-requests {pickup, destination, idempotency_key}`,`POST /rides/:id/accept`,`POST /rides/:id/transitions {expected_state, next_state}`],data:[`DriverAvailability(driver_id, geo_cell, updated_at, status) — ephemeral`,`Ride(ride_id, rider_id, driver_id, state, pickup, destination, version) — durable`,`RideEvent(ride_id, sequence, event_type, occurred_at)`],flow:[`Driver updates location into a partitioned geospatial index.`,`Rider request queries nearby available candidates.`,`Matching service scores a bounded candidate set.`,`Offer/lease a driver with an expiry so only one match wins.`,`Persist trip state transitions with optimistic concurrency.`],components:[{name:`Location service`,purpose:`Ingest and index fresh driver positions`,why:`High-churn ephemeral writes need different storage from trips.`},{name:`Matching service`,purpose:`Find and score nearby drivers`,why:`Owns radius expansion, fairness, ETA, and offer policy.`},{name:`Trip service`,purpose:`Own durable ride state machine`,why:`Prevents invalid or conflicting lifecycle transitions.`},{name:`Event/notification system`,purpose:`Update rider and driver clients`,why:`Participants need real-time state without polling the primary store.`}],decisions:[{question:`How exact must locations be?`,optionA:`Strongly consistent positions: expensive and unnecessary.`,optionB:`Eventually consistent recent positions: scalable but may be stale.`,guidance:`Use freshness timestamps and verify availability during lease/accept.`},{question:`How is a driver reserved?`,optionA:`Database transaction on every candidate.`,optionB:`Short distributed lease/offer, followed by durable assignment.`,guidance:`Lease candidates briefly; conditional transition ensures only one ride assigns the driver.`}],failures:[{failure:`Driver location goes stale`,response:`Exclude entries past a freshness threshold; mark offline asynchronously.`},{failure:`Two matchers select one driver`,response:`Use a conditional lease or compare-and-set on driver availability.`},{failure:`Client repeats trip transition`,response:`Use expected state/version and idempotency keys.`},{failure:`Location index unavailable`,response:`Degrade to a wider/staler regional snapshot or pause matching rather than double-assign.`}],depth:[`Geo-cell partitioning`,`Radius expansion`,`Marketplace fairness`,`ETA computation`,`Trip event auditability`]},{id:`job-queue`,title:`Distributed Job Queue`,subtitle:`Scheduling, retries, and worker coordination`,prompt:`Design a service where producers submit jobs that workers execute asynchronously and reliably.`,priorities:[`Durable acceptance`,`At-least-once processing`,`Backpressure`,`Retries`,`Operational visibility`],clarify:[`Immediate and scheduled jobs?`,`Maximum payload and execution time?`,`Ordering or priority requirements?`,`At-least-once or stronger semantics?`,`How are failures and poison jobs handled?`],scale:[`Jobs/sec, burst multiplier, payload size, and retention.`,`Worker throughput by job type and duration distribution.`,`Queue depth is insufficient; track age of oldest ready job.`,`Estimate retry amplification during a downstream outage.`],api:[`POST /jobs {type, payload_ref, run_at, priority, idempotency_key}`,`GET /jobs/:id`,`POST /jobs/:id/cancel`,`Worker lease/ack/fail protocol`],data:[`Job(job_id, type, status, run_at, attempt, max_attempts, payload_ref)`,`JobAttempt(job_id, attempt, worker_id, started_at, ended_at, error)`,`Store large payloads externally and reference them.`],flow:[`Producer submits and receives acknowledgment only after durable storage.`,`Dispatcher moves due jobs into ready partitions.`,`Worker leases a job with a visibility timeout.`,`Worker completes idempotent work and acknowledges.`,`Expired leases retry with exponential backoff; exhausted jobs enter a dead-letter queue.`],components:[{name:`Submission API`,purpose:`Validate and durably accept work`,why:`Provides idempotency and a stable job identity.`},{name:`Scheduler`,purpose:`Release delayed jobs when due`,why:`Ready queues stay optimized for immediate consumption.`},{name:`Ready queues`,purpose:`Buffer jobs by type/priority`,why:`Decouple producer bursts from worker capacity.`},{name:`Workers + lease manager`,purpose:`Execute with bounded ownership`,why:`A crashed worker's job must become available again.`}],decisions:[{question:`What delivery guarantee?`,optionA:`At-most-once: may lose work.`,optionB:`At-least-once: duplicates possible.`,guidance:`Use at-least-once and require idempotent handlers; exactly-once effects need domain cooperation.`},{question:`Where is retry state?`,optionA:`Worker memory: lost on crash.`,optionB:`Durable job/attempt state: recoverable.`,guidance:`Persist attempt count and next run time; use jittered exponential backoff.`}],failures:[{failure:`Worker dies mid-job`,response:`Lease expires and job becomes visible; handler deduplicates side effects.`},{failure:`Downstream dependency fails`,response:`Back off with jitter, trip circuit breakers, cap retries, monitor queue age.`},{failure:`Poison job always crashes`,response:`Move to dead-letter storage with error context and replay tooling.`},{failure:`Producers exceed capacity`,response:`Apply quotas/backpressure and autoscale using queue age, not just depth.`}],depth:[`Priority starvation`,`Per-tenant fairness`,`Long-running heartbeats`,`Exactly-once business effects`,`Replay and audit tooling`]},{id:`rate-limiter`,title:`Rate Limiter`,subtitle:`Protecting services fairly at high scale`,prompt:`Design a distributed rate limiter for APIs with per-user, per-tenant, and global limits.`,priorities:[`Low decision latency`,`Correct-enough distributed counts`,`Fairness`,`Availability`,`Clear client feedback`],clarify:[`Limit by user, API key, IP, tenant, or route?`,`Hard enforcement or approximate protection?`,`Burst allowance?`,`Single region or global?`,`What happens if the limiter is unavailable?`],scale:[`Decision QPS can equal or exceed API request QPS.`,`Estimate cardinality of active limit keys and window duration.`,`Model hot tenants and shared NAT IPs.`,`Budget limiter latency as a small fraction of endpoint latency.`],api:[`Internal check(key, policy, cost) → allowed, remaining, retry_after`,`Return 429 with Retry-After when rejected`,`Policies are versioned configuration, not hard-coded per call`],data:[`Policy(scope, capacity, refill_rate, burst, mode)`,`Counter/token state keyed by policy + subject`,`Expire inactive keys to bound memory.`],flow:[`Gateway authenticates and derives stable limit keys.`,`Limiter atomically evaluates and updates token/counter state.`,`Allowed requests continue with remaining quota metadata.`,`Rejected requests stop before expensive downstream work.`,`Aggregate telemetry reveals abuse, false positives, and policy impact.`],components:[{name:`Policy service`,purpose:`Own versioned limits and overrides`,why:`Enforcement code should not contain product policy.`},{name:`Decision service`,purpose:`Perform atomic low-latency checks`,why:`Centralizes algorithm and consistent response semantics.`},{name:`Distributed state store`,purpose:`Hold short-lived counters/tokens`,why:`Instances must coordinate without routing every key to one process.`},{name:`Local safety limiter`,purpose:`Protect during dependency failure`,why:`Provides coarse fallback and shields the central limiter.`}],decisions:[{question:`Which algorithm?`,optionA:`Fixed/sliding windows: intuitive, can spike at boundaries.`,optionB:`Token bucket: smooth refill with controlled bursts.`,guidance:`Token bucket is a strong default; explain capacity and refill rate.`},{question:`Fail open or closed?`,optionA:`Open preserves availability but risks overload.`,optionB:`Closed protects capacity but can cause total outage.`,guidance:`Choose per endpoint; use local fallback and tighter limits for expensive writes.`}],failures:[{failure:`Central limiter unavailable`,response:`Use bounded local token buckets; choose fail-open/closed by endpoint risk.`},{failure:`Hot key overloads one partition`,response:`Shard global limits, use hierarchical aggregation, or reserve per-region budgets.`},{failure:`Clock skew affects windows`,response:`Prefer server-side monotonic timing and avoid client timestamps.`},{failure:`Policy update is bad`,response:`Version, canary, audit, and support instant rollback.`}],depth:[`Token bucket math`,`Global versus regional budgets`,`Approximate counters`,`Tenant hierarchy`,`Abuse evasion`]}],ie=Object.fromEntries(w.map(e=>[e.id,e])),ae=[{title:`Requirements`,prompt:`What are we building—and what are we explicitly not building?`,points:[`Name primary actors and top 2–3 actions.`,`Separate functional behavior from quality attributes.`,`Prioritize consistency, availability, latency, durability, cost, and privacy.`]},{title:`Numbers`,prompt:`What must the system survive?`,points:[`Average and peak requests/sec.`,`Read/write ratio and payload sizes.`,`Storage growth and retention.`,`Concurrent connections and geographic distribution.`]},{title:`Contracts`,prompt:`Where are the stable boundaries?`,points:[`Core APIs and identifiers.`,`Pagination and ordering.`,`Idempotency and authorization.`,`Data ownership and lifecycle.`]},{title:`Data flow`,prompt:`What happens on the critical read and write paths?`,points:[`Draw the simplest end-to-end path first.`,`Mark synchronous versus asynchronous boundaries.`,`Name the source of truth and derived state.`,`Identify the likely bottleneck.`]},{title:`Trade-offs`,prompt:`Why does each component earn its place?`,points:[`Describe capability before product name.`,`State what improves and what becomes harder.`,`Tie decisions to stated requirements.`,`Explain how the design evolves at 10×.`]},{title:`Failure`,prompt:`How does the system behave when parts fail?`,points:[`Timeouts, retries, idempotency, and backoff.`,`Partial failure and stale data.`,`Backpressure and overload behavior.`,`Detection, recovery, and operator controls.`]}];function oe({code:e,language:t=`Ruby 3.2`}){let[n,r]=(0,f.useState)(!1);return(0,p.jsxs)(`div`,{className:`code-wrap`,children:[(0,p.jsx)(`span`,{className:`code-language`,children:t}),(0,p.jsx)(`button`,{className:`copy-button`,onClick:async()=>{await navigator.clipboard.writeText(e),r(!0),window.setTimeout(()=>r(!1),1200)},"aria-label":`Copy Ruby code`,children:n?`Copied`:`Copy`}),(0,p.jsx)(`pre`,{children:(0,p.jsx)(`code`,{className:`language-ruby`,children:e})})]})}var se={"0001_two_sum":[`arrays-hashes`],"0003_longest_substring":[`sliding-window`,`arrays-hashes`],"0015_3sum":[`two-pointers`,`sorting-greedy`],"0020_valid_parentheses":[`stack`],"0021_merge_two_sorted_lists":[`linked-lists`],"0033_search_rotated_array":[`binary-search`],"0039_combination_sum":[`backtracking`],"0046_permutations":[`backtracking`],"0053_maximum_subarray":[`dynamic-programming`],"0056_merge_intervals":[`intervals`,`sorting-greedy`],"0057_insert_interval":[`intervals`],"0070_climbing_stairs":[`dynamic-programming`],"0076_min_window_substring":[`sliding-window`,`arrays-hashes`],"0102_binary_tree_level_order":[`queue-bfs`,`trees`],"0104_max_depth_of_binary_tree":[`trees`],"0110_balanced_binary_tree":[`trees`],"0121_best_time_buy_sell_stock":[`sorting-greedy`],"0125_valid_palindrome":[`two-pointers`],"0133_clone_graph":[`graphs`,`queue-bfs`],"0141_linked_list_cycle":[`linked-lists`,`two-pointers`],"0150_eval_reverse_polish":[`stack`],"0155_min_stack":[`stack`],"0200_number_of_islands":[`graphs`,`queue-bfs`],"0206_reverse_linked_list":[`linked-lists`],"0207_course_schedule":[`graphs`],"0216_combination_sum_3":[`backtracking`],"0217_contains_duplicates":[`arrays-hashes`],"0226_invert_binary_tree":[`trees`],"0232_queue_using_stacks":[`stack`,`queue-bfs`],"0235_lca_binary_search_tree":[`trees`],"0238_product_of_array":[`prefix-sums`],"0242_valid_anagram":[`arrays-hashes`],"0252_meeting_rooms":[`intervals`,`sorting-greedy`],"0278_first_bad_version":[`binary-search`],"0322_coin_change":[`dynamic-programming`],"0383_ransom_note":[`arrays-hashes`],"0409_longest_palindrome":[`arrays-hashes`],"0509_fibonacci_number":[`dynamic-programming`],"0535_encode_decode_tinyurl":[`arrays-hashes`],"0542_01_matrix":[`dynamic-programming`],"0543_diameter_of_binary_tree":[`trees`],"0704_binary_search":[`binary-search`],"0733_flood_fill":[`graphs`,`queue-bfs`],"0876_middle_of_linked_list":[`linked-lists`,`two-pointers`],"0973_k_closest_points":[`heap`,`sorting-greedy`],"0981_time_based_kv_store":[`binary-search`,`arrays-hashes`],"0994_rotting_oranges":[`queue-bfs`,`graphs`],"1852_distinct_nums_subarray":[`sliding-window`,`arrays-hashes`]};function ce(e,t){return se[e]?.includes(t)??!1}var T=[{id:`0001_two_sum`,number:1,title:`Two Sum`,prompt:`Return two indexes whose values add to a target.`,pattern:`Hash lookup`,approach:`One-pass complement hash`,time:`O(n)`,space:`O(n)`},{id:`0003_longest_substring`,number:3,title:`Longest Substring Without Repeating Characters`,prompt:`Find the longest contiguous substring containing no repeated character.`,pattern:`Sliding window`,approach:`Variable window with last-seen indexes`,time:`O(n)`,space:`O(k)`},{id:`0015_3sum`,number:15,title:`3Sum`,prompt:`Return every unique triplet whose values sum to zero.`,pattern:`Sorting + two pointers`,approach:`Fix an anchor, then run 2Sum II on the suffix`,time:`O(n²)`,space:`O(n)`},{id:`0020_valid_parentheses`,number:20,title:`Valid Parentheses`,prompt:`Determine whether brackets are correctly matched and nested.`,pattern:`Stack`,approach:`Append openers; pop and match each closer`,time:`O(n)`,space:`O(n)`},{id:`0021_merge_two_sorted_lists`,number:21,title:`Merge Two Sorted Lists`,prompt:`Merge two sorted linked lists into one sorted list.`,pattern:`Linked-list pointers`,approach:`Iterative merge behind a sentinel node`,time:`O(n + m)`,space:`O(1)`},{id:`0033_search_rotated_array`,number:33,title:`Search in Rotated Sorted Array`,prompt:`Find a target in a sorted array that was rotated once.`,pattern:`Binary search`,approach:`Identify the sorted half before discarding one side`,time:`O(log n)`,space:`O(1)`},{id:`0039_combination_sum`,number:39,title:`Combination Sum`,prompt:`Return combinations that add to a target when candidates may be reused.`,pattern:`Backtracking`,approach:`Choose, explore with remaining target, then undo`,time:`O(N^(T/M)) worst case`,space:`O(T/M)`},{id:`0046_permutations`,number:46,title:`Permutations`,prompt:`Return every ordering of a list of distinct values.`,pattern:`Backtracking`,approach:`Build each ordering with choose, explore, undo`,time:`O(n · n!)`,space:`O(n) excluding output`},{id:`0053_maximum_subarray`,number:53,title:`Maximum Subarray`,prompt:`Find the largest sum among all contiguous subarrays.`,pattern:`Dynamic programming / greedy`,approach:`Kadane’s algorithm: extend or restart at each value`,time:`O(n)`,space:`O(1)`},{id:`0056_merge_intervals`,number:56,title:`Merge Intervals`,prompt:`Combine every overlapping interval.`,pattern:`Sorting + sweep`,approach:`Sort by start, then extend the active interval`,time:`O(n log n)`,space:`O(n)`},{id:`0057_insert_interval`,number:57,title:`Insert Interval`,prompt:`Insert one interval into sorted non-overlapping intervals and merge as needed.`,pattern:`Intervals`,approach:`Append before, merge overlaps, append after`,time:`O(n)`,space:`O(1) excluding output`},{id:`0067_add_binary`,number:67,title:`Add Binary`,prompt:`Add two binary strings and return their binary sum.`,pattern:`Right-to-left simulation`,approach:`Walk both strings with a carry`,time:`O(max(n, m))`,space:`O(max(n, m))`},{id:`0070_climbing_stairs`,number:70,title:`Climbing Stairs`,prompt:`Count ways to reach step n using one- or two-step moves.`,pattern:`Dynamic programming`,approach:`Fibonacci recurrence from smaller stair counts`,time:`O(n)`,space:`O(n)`},{id:`0076_min_window_substring`,number:76,title:`Minimum Window Substring`,prompt:`Find the shortest substring containing all required character counts.`,pattern:`Sliding window`,approach:`Expand to satisfy counts, then shrink while valid`,time:`O(n + m)`,space:`O(k)`},{id:`0102_binary_tree_level_order`,number:102,title:`Binary Tree Level Order Traversal`,prompt:`Return tree values grouped by depth.`,pattern:`Breadth-first search`,approach:`Queue nodes and process one captured level size at a time`,time:`O(n)`,space:`O(n)`},{id:`0104_max_depth_of_binary_tree`,number:104,title:`Maximum Depth of Binary Tree`,prompt:`Return the number of nodes on the longest root-to-leaf path.`,pattern:`Tree DFS`,approach:`Return 1 plus the deeper child height`,time:`O(n)`,space:`O(h)`},{id:`0110_balanced_binary_tree`,number:110,title:`Balanced Binary Tree`,prompt:`Determine whether every node’s subtree heights differ by at most one.`,pattern:`Postorder tree DFS`,approach:`Return height or a sentinel for imbalance`,time:`O(n)`,space:`O(h)`},{id:`0121_best_time_buy_sell_stock`,number:121,title:`Best Time to Buy and Sell Stock`,prompt:`Maximize profit from one buy followed by one sell.`,pattern:`One-pass greedy`,approach:`Track the lowest prior price and best profit`,time:`O(n)`,space:`O(1)`},{id:`0125_valid_palindrome`,number:125,title:`Valid Palindrome`,prompt:`Check whether alphanumeric characters read the same in both directions.`,pattern:`Two pointers`,approach:`Move inward while skipping non-alphanumeric characters`,time:`O(n)`,space:`O(1)`},{id:`0133_clone_graph`,number:133,title:`Clone Graph`,prompt:`Deep-copy every node and edge in a connected graph.`,pattern:`Graph traversal + hash`,approach:`BFS with original-node to clone mapping`,time:`O(V + E)`,space:`O(V)`},{id:`0136_single_number`,number:136,title:`Single Number`,prompt:`Find the one value that appears once when every other value appears twice.`,pattern:`Bit manipulation`,approach:`XOR every value to cancel equal pairs`,time:`O(n)`,space:`O(1)`},{id:`0141_linked_list_cycle`,number:141,title:`Linked List Cycle`,prompt:`Determine whether following next pointers eventually repeats a node.`,pattern:`Fast and slow pointers`,approach:`Floyd’s tortoise-and-hare cycle detection`,time:`O(n)`,space:`O(1)`},{id:`0150_eval_reverse_polish`,number:150,title:`Evaluate Reverse Polish Notation`,prompt:`Evaluate a postfix arithmetic expression.`,pattern:`Stack`,approach:`Append numbers; pop two operands for each operator`,time:`O(n)`,space:`O(n)`},{id:`0155_min_stack`,number:155,title:`Min Stack`,prompt:`Design a stack supporting push, pop, top, and minimum in constant time.`,pattern:`Augmented stack`,approach:`Store the minimum associated with each stack state`,time:`O(1) per operation`,space:`O(n)`},{id:`0169_majority_element`,number:169,title:`Majority Element`,prompt:`Find the value occurring more than half the time.`,pattern:`Boyer–Moore voting`,approach:`Cancel different values while maintaining one candidate`,time:`O(n)`,space:`O(1)`},{id:`0200_number_of_islands`,number:200,title:`Number of Islands`,prompt:`Count connected groups of land cells in a grid.`,pattern:`Grid BFS`,approach:`Flood-fill each unseen land component once`,time:`O(rows · cols)`,space:`O(rows · cols)`},{id:`0206_reverse_linked_list`,number:206,title:`Reverse Linked List`,prompt:`Reverse every next pointer in a singly linked list.`,pattern:`Linked-list pointers`,approach:`Iteratively preserve next, rewire, and advance`,time:`O(n)`,space:`O(1)`},{id:`0207_course_schedule`,number:207,title:`Course Schedule`,prompt:`Determine whether directed prerequisites contain a cycle.`,pattern:`Topological sort`,approach:`Kahn’s algorithm with indegrees and a queue`,time:`O(V + E)`,space:`O(V + E)`},{id:`0208_implement_trie`,number:208,title:`Implement Trie`,prompt:`Support word insertion, exact search, and prefix search.`,pattern:`Trie`,approach:`Walk one child edge per character`,time:`O(L) per operation`,space:`O(total characters)`},{id:`0216_combination_sum_3`,number:216,title:`Combination Sum III`,prompt:`Choose k distinct digits from 1–9 whose sum equals n.`,pattern:`Backtracking`,approach:`Explore increasing digits with count and sum pruning`,time:`O(Σ C(9,d) + R·k)`,space:`O(k) excluding output`},{id:`0217_contains_duplicates`,number:217,title:`Contains Duplicate`,prompt:`Determine whether any value appears more than once.`,pattern:`Hash membership`,approach:`Compare each value against a seen hash`,time:`O(n)`,space:`O(n)`},{id:`0226_invert_binary_tree`,number:226,title:`Invert Binary Tree`,prompt:`Swap every node’s left and right subtrees.`,pattern:`Tree DFS`,approach:`Recursively invert children, then swap them`,time:`O(n)`,space:`O(h)`},{id:`0232_queue_using_stacks`,number:232,title:`Implement Queue Using Stacks`,prompt:`Implement FIFO behavior using only stack operations.`,pattern:`Two stacks`,approach:`Lazy transfer from input stack to output stack`,time:`O(1) amortized`,space:`O(n)`},{id:`0235_lca_binary_search_tree`,number:235,title:`Lowest Common Ancestor of a BST`,prompt:`Find the lowest node whose subtree contains both targets.`,pattern:`BST ordering`,approach:`Walk toward both values until they split around the current node`,time:`O(h)`,space:`O(1)`},{id:`0238_product_of_array`,number:238,title:`Product of Array Except Self`,prompt:`Return each position’s product of all other values without division.`,pattern:`Prefix and suffix products`,approach:`Write prefix products, then multiply a running suffix`,time:`O(n)`,space:`O(1) excluding output`},{id:`0242_valid_anagram`,number:242,title:`Valid Anagram`,prompt:`Determine whether two strings contain identical character counts.`,pattern:`Frequency counting`,approach:`Increment for one string and decrement for the other`,time:`O(n + m)`,space:`O(k)`},{id:`0252_meeting_rooms`,number:252,title:`Meeting Rooms`,prompt:`Determine whether any meeting intervals overlap.`,pattern:`Sorting + intervals`,approach:`Sort by start and compare adjacent boundaries`,time:`O(n log n)`,space:`O(n)`},{id:`0278_first_bad_version`,number:278,title:`First Bad Version`,prompt:`Find the first true value in a monotonic sequence of versions.`,pattern:`Binary search`,approach:`Lower-bound search for the first bad version`,time:`O(log n)`,space:`O(1)`},{id:`0322_coin_change`,number:322,title:`Coin Change`,prompt:`Find the fewest coins needed to make an amount.`,pattern:`Dynamic programming`,approach:`Build the best answer for every smaller amount`,time:`O(amount · coins)`,space:`O(amount)`},{id:`0383_ransom_note`,number:383,title:`Ransom Note`,prompt:`Determine whether magazine characters can construct a note.`,pattern:`Frequency counting`,approach:`Build available counts, then consume each required character`,time:`O(n + m)`,space:`O(k)`},{id:`0409_longest_palindrome`,number:409,title:`Longest Palindrome`,prompt:`Find the longest palindrome length constructible from supplied characters.`,pattern:`Frequency parity`,approach:`Use every pair plus at most one odd center`,time:`O(n)`,space:`O(k)`},{id:`0509_fibonacci_number`,number:509,title:`Fibonacci Number`,prompt:`Return the nth Fibonacci number.`,pattern:`Dynamic programming`,approach:`Iterate while retaining only the previous two values`,time:`O(n)`,space:`O(1)`},{id:`0535_encode_decode_tinyurl`,number:535,title:`Encode and Decode TinyURL`,prompt:`Design reversible short aliases for long URLs.`,pattern:`Hash-backed design`,approach:`Generate a unique key and store its URL mapping`,time:`O(1) average per operation`,space:`O(n) mappings`},{id:`0542_01_matrix`,number:542,title:`01 Matrix`,prompt:`Return each cell’s distance to its nearest zero.`,pattern:`Grid dynamic programming`,approach:`Forward and reverse directional distance passes`,time:`O(rows · cols)`,space:`O(1) excluding output`},{id:`0543_diameter_of_binary_tree`,number:543,title:`Diameter of Binary Tree`,prompt:`Find the longest path between any two tree nodes.`,pattern:`Postorder tree DFS`,approach:`Return subtree height while recording left height + right height`,time:`O(n)`,space:`O(h)`},{id:`0704_binary_search`,number:704,title:`Binary Search`,prompt:`Find a target index in a sorted array.`,pattern:`Binary search`,approach:`Maintain an inclusive interval and discard half each step`,time:`O(log n)`,space:`O(1)`},{id:`0733_flood_fill`,number:733,title:`Flood Fill`,prompt:`Recolor the connected component containing a starting pixel.`,pattern:`Grid DFS / BFS`,approach:`Traverse matching neighbors and mark them immediately`,time:`O(rows · cols)`,space:`O(rows · cols)`},{id:`0876_middle_of_linked_list`,number:876,title:`Middle of the Linked List`,prompt:`Return the middle node, choosing the second middle when length is even.`,pattern:`Fast and slow pointers`,approach:`Move slow once and fast twice`,time:`O(n)`,space:`O(1)`},{id:`0973_k_closest_points`,number:973,title:`K Closest Points to Origin`,prompt:`Return the k points with the smallest squared distance from the origin.`,pattern:`Sorting / top K`,approach:`Sort points by squared distance and take k`,time:`O(n log n)`,space:`O(n)`},{id:`0981_time_based_kv_store`,number:981,title:`Time Based Key-Value Store`,prompt:`Store timestamped values and retrieve the newest value at or before a time.`,pattern:`Hash + binary search`,approach:`Append ordered versions per key; upper-bound search on get`,time:`set O(1); get O(log n)`,space:`O(n)`},{id:`0994_rotting_oranges`,number:994,title:`Rotting Oranges`,prompt:`Find minutes for rot to reach every fresh orange, or report impossibility.`,pattern:`Multi-source BFS`,approach:`Start from every rotten orange and process the grid by minute`,time:`O(rows · cols)`,space:`O(rows · cols)`},{id:`1852_distinct_nums_subarray`,number:1852,title:`Distinct Numbers in Each Subarray`,prompt:`Count distinct values in every contiguous window of size k.`,pattern:`Fixed sliding window`,approach:`Maintain a frequency hash while one value enters and one leaves`,time:`O(n)`,space:`O(k)`}],le=Object.fromEntries(T.map(e=>[e.id,e]));function E({title:e,items:t,tone:n}){return(0,p.jsxs)(`section`,{className:`bullet-panel ${n}`,children:[(0,p.jsx)(`h3`,{children:e}),(0,p.jsx)(`ul`,{children:t.map(e=>(0,p.jsx)(`li`,{children:e},e))})]})}function D({algorithm:e}){let t=C.findIndex(t=>t.id===e.id),n=C[(t-1+C.length)%C.length],r=C[(t+1)%C.length],i=T.filter(t=>ce(t.id,e.id));return(0,p.jsxs)(v,{active:`algorithms`,children:[(0,p.jsx)(y,{kicker:e.eyebrow,title:e.title,copy:e.summary,children:(0,p.jsxs)(`div`,{className:`hero-metrics`,children:[(0,p.jsxs)(`span`,{children:[(0,p.jsx)(`small`,{children:`Time`}),e.time]}),(0,p.jsxs)(`span`,{children:[(0,p.jsx)(`small`,{children:`Space`}),e.space]})]})}),(0,p.jsxs)(`section`,{className:`section detail-section`,children:[(0,p.jsxs)(`aside`,{className:`detail-toc`,children:[(0,p.jsx)(`a`,{href:`/algorithms/`,children:`← All algorithms`}),(0,p.jsx)(`p`,{children:`On this page`}),(0,p.jsx)(`a`,{href:`#model`,children:`Mental model`}),e.primer&&(0,p.jsx)(`a`,{href:`#primer`,children:`First principles`}),i.length>0&&(0,p.jsx)(`a`,{href:`#related-problems`,children:`Related problems`}),(0,p.jsx)(`a`,{href:`#decision`,children:`When to use`}),(0,p.jsx)(`a`,{href:`#method`,children:`Method`}),(0,p.jsx)(`a`,{href:`#examples`,children:`Examples`}),(0,p.jsx)(`a`,{href:`#ruby`,children:`Ruby 3.2`})]}),(0,p.jsxs)(`article`,{className:`detail-content`,children:[(0,p.jsxs)(`section`,{className:`mental-callout`,id:`model`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Mental model`}),(0,p.jsx)(`h2`,{children:e.mentalModel})]}),e.primer&&(0,p.jsxs)(`section`,{className:`concept-primer`,id:`primer`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`First principles`}),(0,p.jsx)(`h2`,{children:e.primer.title}),(0,p.jsx)(`p`,{className:`primer-intro`,children:e.primer.intro}),(0,p.jsx)(`div`,{className:`primer-walkthrough`,children:e.primer.walkthrough.map((e,t)=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`span`,{children:String(t+1).padStart(2,`0`)}),(0,p.jsx)(`h3`,{children:e.action}),(0,p.jsx)(`code`,{children:e.state}),(0,p.jsx)(`p`,{children:e.explanation})]},e.action))}),(0,p.jsx)(`div`,{className:`primer-terms`,children:e.primer.terms.map(e=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`h3`,{children:e.term}),(0,p.jsx)(`p`,{children:e.definition})]},e.term))})]}),i.length>0&&(0,p.jsxs)(`section`,{className:`related-problems`,id:`related-problems`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Problem guides using this pattern`}),(0,p.jsx)(`h2`,{children:`Practice the connection`}),(0,p.jsx)(`p`,{className:`related-intro`,children:`Name why the pattern fits before opening a solution.`}),(0,p.jsx)(`div`,{className:`related-problem-grid`,children:i.map(e=>(0,p.jsxs)(`a`,{href:`/problems/${e.id}/`,children:[(0,p.jsxs)(`span`,{children:[`#`,e.number,` · `,e.pattern]}),(0,p.jsx)(`h3`,{children:e.title}),(0,p.jsx)(`p`,{children:e.prompt}),(0,p.jsxs)(`strong`,{children:[e.time,` time →`]})]},e.id))})]}),(0,p.jsxs)(`div`,{className:`decision-grid`,id:`decision`,children:[(0,p.jsx)(E,{title:`Use it when`,items:e.whenToUse,tone:`yes`}),(0,p.jsx)(E,{title:`Do not reach for it when`,items:e.whenNotToUse,tone:`no`})]}),(0,p.jsxs)(`section`,{className:`method-section`,id:`method`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`The method`}),(0,p.jsx)(`h2`,{children:`Talk through it before coding it.`}),(0,p.jsx)(`ol`,{children:e.steps.map((e,t)=>(0,p.jsxs)(`li`,{children:[(0,p.jsx)(`span`,{children:t+1}),(0,p.jsx)(`p`,{children:e})]},e))})]}),(0,p.jsxs)(`section`,{className:`pitfall-section`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Common failure modes`}),(0,p.jsx)(`div`,{children:e.pitfalls.map(e=>(0,p.jsx)(`p`,{children:e},e))})]}),(0,p.jsxs)(`section`,{className:`example-section`,id:`examples`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Practice recognizing it`}),(0,p.jsx)(`h2`,{children:`Example problems`}),(0,p.jsx)(`div`,{className:`example-grid`,children:e.examples.map(e=>(0,p.jsxs)(`article`,{className:`example-card`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`span`,{children:e.difficulty}),(0,p.jsx)(`h3`,{children:e.title})]}),(0,p.jsx)(`p`,{children:e.prompt}),(0,p.jsxs)(`dl`,{children:[(0,p.jsx)(`dt`,{children:`Signal`}),(0,p.jsx)(`dd`,{children:e.signal}),(0,p.jsx)(`dt`,{children:`Approach`}),(0,p.jsx)(`dd`,{children:e.outline})]})]},e.title))})]}),(0,p.jsxs)(`section`,{className:`ruby-example`,id:`ruby`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Ruby 3.2 template`}),(0,p.jsx)(`h2`,{children:`A clean starting point`}),(0,p.jsx)(oe,{code:e.code})]})]})]}),(0,p.jsxs)(`nav`,{className:`next-guide`,children:[(0,p.jsxs)(`a`,{href:`/algorithms/${n.id}/`,children:[(0,p.jsx)(`small`,{children:`Previous`}),(0,p.jsxs)(`strong`,{children:[`← `,n.title]})]}),(0,p.jsxs)(`a`,{href:`/algorithms/${r.id}/`,children:[(0,p.jsx)(`small`,{children:`Next`}),(0,p.jsxs)(`strong`,{children:[r.title,` →`]})]})]})]})}function ue(){let[e,t]=(0,f.useState)(``),n=(0,f.useMemo)(()=>{let t=e.trim().toLowerCase();return t?C.filter(e=>[e.title,e.eyebrow,e.summary,...e.whenToUse,...e.examples.map(e=>e.title)].join(` `).toLowerCase().includes(t)):C},[e]);return(0,p.jsxs)(v,{active:`algorithms`,children:[(0,p.jsx)(b,{label:`Algorithm review`,title:`Algorithms`,reminder:`Name the structural cue before the algorithm. Then say what state you need to maintain and what makes each step safe.`,cues:[`contiguous → window`,`sorted / monotonic → pointers or binary search`,`repeated best → heap`,`dependencies → graph`]}),(0,p.jsxs)(`section`,{className:`section library-section`,children:[(0,p.jsxs)(`div`,{className:`library-toolbar`,children:[(0,p.jsxs)(`p`,{"aria-live":`polite`,children:[(0,p.jsx)(`strong`,{children:n.length===C.length?`${C.length} guides`:`${n.length} of ${C.length} guides`}),` Search by a cue from the problem, not just an algorithm name.`]}),(0,p.jsxs)(`div`,{className:`search-box`,role:`search`,children:[(0,p.jsx)(`span`,{"aria-hidden":`true`,children:`⌕`}),(0,p.jsx)(`input`,{"aria-label":`Search algorithm guides`,value:e,onChange:e=>t(e.target.value),placeholder:`Search: top k, contiguous, dependencies…`}),e&&(0,p.jsx)(`button`,{type:`button`,"aria-label":`Clear algorithm search`,onClick:()=>t(``),children:`×`})]})]}),(0,p.jsx)(`div`,{className:`guide-grid`,children:n.map((e,t)=>(0,p.jsxs)(`a`,{className:`guide-card`,href:`/algorithms/${e.id}/`,children:[(0,p.jsxs)(`div`,{className:`guide-card-top`,children:[(0,p.jsx)(`span`,{children:String(t+1).padStart(2,`0`)}),(0,p.jsx)(`em`,{children:e.eyebrow})]}),(0,p.jsx)(`h2`,{children:e.title}),(0,p.jsx)(`p`,{children:e.summary}),(0,p.jsxs)(`div`,{className:`guide-card-meta`,children:[(0,p.jsx)(`code`,{children:e.time}),(0,p.jsx)(`strong`,{children:`Read guide →`})]})]},e.id))}),n.length===0&&(0,p.jsx)(`div`,{className:`no-results`,children:`No match. Try the problem's structural cue rather than its story.`})]})]})}function de({id:e,kicker:t,title:n,items:r}){return(0,p.jsxs)(`section`,{className:`arch-list-section`,id:e,children:[(0,p.jsx)(`p`,{className:`kicker`,children:t}),(0,p.jsx)(`h2`,{children:n}),(0,p.jsx)(`ul`,{children:r.map(e=>(0,p.jsx)(`li`,{children:e},e))})]})}function fe({guide:e}){let t=w[(w.findIndex(t=>t.id===e.id)+1)%w.length];return(0,p.jsxs)(v,{active:`architecture`,children:[(0,p.jsx)(y,{kicker:e.subtitle,title:e.title,copy:e.prompt,children:(0,p.jsx)(`div`,{className:`hero-pill-row`,children:e.priorities.map(e=>(0,p.jsx)(`span`,{children:e},e))})}),(0,p.jsxs)(`section`,{className:`section arch-detail-layout`,children:[(0,p.jsxs)(`aside`,{className:`detail-toc`,children:[(0,p.jsx)(`a`,{href:`/architecture/`,children:`← Architecture home`}),(0,p.jsx)(`p`,{children:`On this page`}),(0,p.jsx)(`a`,{href:`#clarify`,children:`Clarify`}),(0,p.jsx)(`a`,{href:`#numbers`,children:`Scale`}),(0,p.jsx)(`a`,{href:`#contract`,children:`Contract`}),(0,p.jsx)(`a`,{href:`#flow`,children:`Data flow`}),(0,p.jsx)(`a`,{href:`#components`,children:`Components`}),(0,p.jsx)(`a`,{href:`#tradeoffs`,children:`Trade-offs`}),(0,p.jsx)(`a`,{href:`#failures`,children:`Failures`})]}),(0,p.jsxs)(`article`,{className:`arch-detail-content`,children:[(0,p.jsxs)(`section`,{className:`prompt-card`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Start here—before looking below`}),(0,p.jsx)(`h2`,{children:e.prompt}),(0,p.jsx)(`p`,{children:`Take five minutes to ask questions and name priorities aloud. Then use the guide to fill gaps, not to memorize one “correct” architecture.`})]}),(0,p.jsx)(de,{id:`clarify`,kicker:`Step 1`,title:`Clarifying questions`,items:e.clarify}),(0,p.jsx)(de,{id:`numbers`,kicker:`Step 2`,title:`Back-of-the-envelope scale`,items:e.scale}),(0,p.jsxs)(`section`,{className:`contract-grid`,id:`contract`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 3 · API`}),(0,p.jsx)(`h2`,{children:`Define the contract`}),e.api.map(e=>(0,p.jsx)(`code`,{children:e},e))]}),(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 3 · Data`}),(0,p.jsx)(`h2`,{children:`Name ownership`}),e.data.map(e=>(0,p.jsx)(`p`,{children:e},e))]})]}),(0,p.jsxs)(`section`,{className:`flow-section`,id:`flow`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 4`}),(0,p.jsx)(`h2`,{children:`Walk the critical path`}),(0,p.jsx)(`ol`,{children:e.flow.map((e,t)=>(0,p.jsxs)(`li`,{children:[(0,p.jsx)(`span`,{children:t+1}),(0,p.jsx)(`p`,{children:e})]},e))})]}),(0,p.jsxs)(`section`,{className:`component-section`,id:`components`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 5`}),(0,p.jsx)(`h2`,{children:`Make every box earn its place`}),(0,p.jsx)(`div`,{className:`component-grid`,children:e.components.map(e=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`h3`,{children:e.name}),(0,p.jsx)(`strong`,{children:e.purpose}),(0,p.jsx)(`p`,{children:e.why})]},e.name))})]}),(0,p.jsxs)(`section`,{className:`tradeoff-section`,id:`tradeoffs`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 6`}),(0,p.jsx)(`h2`,{children:`Say both sides of the decision`}),e.decisions.map(e=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`h3`,{children:e.question}),(0,p.jsxs)(`div`,{children:[(0,p.jsxs)(`p`,{children:[(0,p.jsx)(`span`,{children:`A`}),e.optionA]}),(0,p.jsxs)(`p`,{children:[(0,p.jsx)(`span`,{children:`B`}),e.optionB]})]}),(0,p.jsx)(`strong`,{children:e.guidance})]},e.question))]}),(0,p.jsxs)(`section`,{className:`failure-section`,id:`failures`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Step 7`}),(0,p.jsx)(`h2`,{children:`Pressure-test the design`}),(0,p.jsx)(`div`,{children:e.failures.map(e=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`h3`,{children:e.failure}),(0,p.jsx)(`p`,{children:e.response})]},e.failure))})]}),(0,p.jsxs)(`section`,{className:`deep-dive`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`If the interviewer goes deeper`}),(0,p.jsx)(`h2`,{children:`Be ready to explore`}),(0,p.jsx)(`div`,{children:e.depth.map(e=>(0,p.jsx)(`span`,{children:e},e))})]})]})]}),(0,p.jsx)(`nav`,{className:`next-guide single`,children:(0,p.jsxs)(`a`,{href:`/architecture/${t.id}/`,children:[(0,p.jsx)(`small`,{children:`Next case study`}),(0,p.jsxs)(`strong`,{children:[t.title,` →`]})]})})]})}function pe(){return(0,p.jsxs)(v,{active:`architecture`,children:[(0,p.jsx)(b,{label:`System design review`,title:`Architecture`,reminder:`Do not draw boxes yet. Clarify reads, writes, scale, latency, consistency, and failure behavior first; then make every component earn its place.`,cues:[`clarify`,`estimate`,`contract`,`critical path`,`trade-offs`,`failures`]}),(0,p.jsxs)(`section`,{className:`section architecture-principle`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`The central habit`}),(0,p.jsxs)(`blockquote`,{children:[`“This component provides `,(0,p.jsx)(`em`,{children:`this capability`}),`, protects `,(0,p.jsx)(`em`,{children:`this requirement`}),`, and costs us `,(0,p.jsx)(`em`,{children:`this trade-off`}),`.”`]}),(0,p.jsx)(`p`,{children:`Avoid using “add a cache,” “use Kafka,” or “put it in DynamoDB” as complete answers. Describe the required behavior first; technologies are examples, not reasoning.`})]}),(0,p.jsxs)(`section`,{className:`section interview-timeline`,children:[(0,p.jsxs)(`div`,{className:`section-heading compact-heading`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`A 60-minute shape`}),(0,p.jsx)(`h2`,{children:`Keep moving while leaving room for depth.`})]}),(0,p.jsx)(`div`,{className:`timeline-grid`,children:re.map(e=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`span`,{children:e.minutes}),(0,p.jsx)(`h3`,{children:e.title}),(0,p.jsx)(`p`,{children:e.detail})]},e.minutes))})]}),(0,p.jsxs)(`section`,{className:`section foundation-section`,children:[(0,p.jsxs)(`div`,{className:`section-heading compact-heading`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Six lenses`}),(0,p.jsx)(`h2`,{children:`A framework you can reuse for any prompt.`})]}),(0,p.jsx)(`div`,{className:`foundation-grid`,children:ae.map((e,t)=>(0,p.jsxs)(`article`,{children:[(0,p.jsx)(`span`,{children:String(t+1).padStart(2,`0`)}),(0,p.jsx)(`h3`,{children:e.title}),(0,p.jsx)(`strong`,{children:e.prompt}),(0,p.jsx)(`ul`,{children:e.points.map(e=>(0,p.jsx)(`li`,{children:e},e))})]},e.title))})]}),(0,p.jsxs)(`section`,{className:`section case-study-section`,children:[(0,p.jsxs)(`div`,{className:`section-heading pattern-heading`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Practice prompts`}),(0,p.jsx)(`h2`,{children:`Common systems, deeply explained`})]}),(0,p.jsx)(`p`,{children:`Start with the prompt, speak your clarifying questions aloud, then compare your path to the guide.`})]}),(0,p.jsx)(`div`,{className:`case-grid`,children:w.map((e,t)=>(0,p.jsxs)(`a`,{className:`case-card`,href:`/architecture/${e.id}/`,children:[(0,p.jsx)(`span`,{children:String(t+1).padStart(2,`0`)}),(0,p.jsx)(`p`,{children:e.subtitle}),(0,p.jsx)(`h3`,{children:e.title}),(0,p.jsx)(`ul`,{children:e.priorities.slice(0,3).map(e=>(0,p.jsx)(`li`,{children:e},e))}),(0,p.jsx)(`strong`,{children:`Open case study →`})]},e.id))})]}),(0,p.jsxs)(`section`,{className:`section pressure-section`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Pressure-test every design`}),(0,p.jsx)(`h2`,{children:`Failure is part of the architecture.`})]}),(0,p.jsx)(`div`,{className:`pressure-grid`,children:[`What times out?`,`What retries—and can it duplicate effects?`,`What becomes stale?`,`What is the source of truth?`,`Where does backpressure appear?`,`What is the hot key or hot partition?`,`What does the client observe?`,`How will an operator know?`,`How is it rolled back?`].map(e=>(0,p.jsx)(`p`,{children:e},e))})]})]})}var me=[{id:`ds-01`,category:`Data structures`,question:`What is the average lookup time for a Ruby Hash?`,answer:`O(1) average.`,detail:`Worst case can degrade, but O(1) average is the interview assumption for well-distributed keys.`},{id:`ds-02`,category:`Data structures`,question:`What operations make a Ruby Array work as a stack in this guide?`,answer:`array.append(item) and array.pop.`,detail:`Both operate at the end and are O(1) amortized. We consistently use append rather than another Ruby alias because it matches Python's vocabulary.`},{id:`ds-03`,category:`Data structures`,question:`Why avoid Array#shift in a BFS hot loop?`,answer:`It is O(n) because later elements must move.`,detail:`Keep a head index into the array instead.`},{id:`ds-04`,category:`Data structures`,question:`What does the root of a min-heap guarantee?`,answer:`It is the globally smallest item.`,detail:`The rest of the heap is only partially ordered, not fully sorted.`},{id:`ds-05`,category:`Data structures`,question:`What are the child indexes of heap node i?`,answer:`Left = 2*i + 1; right = 2*i + 2.`,detail:`The parent index is (i - 1) / 2 using integer division.`},{id:`ds-06`,category:`Data structures`,question:`When is a Set preferable to a Hash?`,answer:`When you need unique items or membership checks, but no value associated with each item.`,detail:`In Ruby 3.2, Set is built in and autoloaded. Use Set.new, set.add(item), and set.include?(item); no import is needed.`},{id:`ds-07`,category:`Data structures`,question:`What does a queue guarantee?`,answer:`First in, first out (FIFO).`,detail:`That ordering makes BFS visit states by increasing unweighted distance.`},{id:`ds-08`,category:`Data structures`,question:`What is a graph adjacency list?`,answer:`A mapping from each node to its neighbors.`,detail:`It uses O(V + E) space and is usually best for sparse graphs.`},{id:`ds-09`,category:`Data structures`,question:`What is a linked-list sentinel node for?`,answer:`It removes special cases around the head.`,detail:`Attach real nodes after a dummy node, then return dummy.next.`},{id:`ds-10`,category:`Data structures`,question:`What does union-find efficiently track?`,answer:`Which items belong to the same connected group as new links are added.`,detail:`If A joins B and B joins C, union-find can quickly answer that A and C are connected. The formal name for these separate groups is disjoint sets. Path compression and union by size keep repeated lookups extremely fast.`},{id:`pt-01`,category:`Patterns`,question:`What is the key signal for a sliding window?`,answer:`A question about a contiguous range whose state updates as endpoints move.`,detail:`Common wording: longest, shortest, or count of valid subarrays/substrings.`},{id:`pt-02`,category:`Patterns`,question:`What must justify every two-pointer move?`,answer:`A fact proving the discarded candidates cannot be answers.`,detail:`Sorted order or a limiting boundary often provides that proof.`},{id:`pt-03`,category:`Patterns`,question:`When does BFS find a shortest path?`,answer:`When every edge has equal cost.`,detail:`For different nonnegative costs, use a priority-queue approach such as Dijkstra.`},{id:`pt-04`,category:`Patterns`,question:`What are the three backtracking actions?`,answer:`Choose, explore, undo.`,detail:`Prune before exploring any partial choice that cannot become valid.`},{id:`pt-05`,category:`Patterns`,question:`What makes binary search on an answer possible?`,answer:`A monotonic feasibility predicate.`,detail:`Once candidate x is feasible, all candidates on one side must also be feasible.`},{id:`pt-06`,category:`Patterns`,question:`What equation gives a range sum from prefix sums?`,answer:`sum(left..right) = prefix[right + 1] - prefix[left].`,detail:`Define prefix[i] as the sum of elements before index i.`},{id:`pt-07`,category:`Patterns`,question:`What question should you answer before writing recursive tree code?`,answer:`What does this function return for the subtree rooted here?`,detail:`That contract determines the base case and child combination.`},{id:`pt-08`,category:`Patterns`,question:`What does a topological sort produce?`,answer:`An order where every directed prerequisite appears before its dependent.`,detail:`If not all nodes can be processed, the graph contains a directed cycle.`},{id:`pt-09`,category:`Patterns`,question:`What is the main signal for dynamic programming?`,answer:`Repeated subproblems plus a compact state.`,detail:`DP commonly answers optimization, counting, or feasibility questions.`},{id:`pt-10`,category:`Patterns`,question:`What must a greedy solution include besides a local rule?`,answer:`A proof the local choice cannot hurt the optimum.`,detail:`An exchange argument or stays-ahead argument is common.`},{id:`pt-11`,category:`Patterns`,question:`What does a monotonic stack usually store?`,answer:`Unresolved candidates in increasing or decreasing order.`,detail:`Each item is appended and popped at most once, yielding O(n) total work.`},{id:`pt-12`,category:`Patterns`,question:`When should you reach for a heap?`,answer:`When you repeatedly need the current minimum or maximum as data changes.`,detail:`Typical examples are top K, scheduling, and merging sorted streams.`},{id:`pt-13`,category:`Patterns`,question:`Why sort intervals before merging?`,answer:`Only the last merged interval can overlap the next interval.`,detail:`Sorting converts a global overlap problem into local comparisons.`},{id:`pt-14`,category:`Patterns`,question:`How do slow and fast pointers detect a linked-list cycle?`,answer:`Fast eventually laps slow if a cycle exists.`,detail:`Compare node identity, not node values.`},{id:`pt-15`,category:`Patterns`,question:`When do negative numbers break a variable-sum sliding window?`,answer:`When moving an endpoint no longer changes the sum monotonically.`,detail:`Prefix sums plus a hash often handle target sums with negatives.`},{id:`cr-01`,category:`Complexity & Ruby`,question:`What is the time complexity of comparison sorting?`,answer:`O(n log n) for standard comparison sorts.`,detail:`Ruby's sort and sort_by should be described as O(n log n).`},{id:`cr-02`,category:`Complexity & Ruby`,question:`What is the complexity of a graph DFS or BFS?`,answer:`O(V + E) time.`,detail:`Each vertex and edge is processed a constant number of times.`},{id:`cr-03`,category:`Complexity & Ruby`,question:`How do you derive basic DP time complexity?`,answer:`Number of states × transitions per state.`,detail:`State dimensions matter more than whether the code is recursive or iterative.`},{id:`cr-04`,category:`Complexity & Ruby`,question:`What does Hash.new(0) enable?`,answer:`Frequency counting without checking for missing keys.`,detail:`counts[item] += 1 works because missing keys read as zero.`},{id:`cr-05`,category:`Complexity & Ruby`,question:`Why is Hash.new([]) dangerous?`,answer:`Every missing key returns the same mutable array.`,detail:`Use Hash.new { |hash, key| hash[key] = [] }.`},{id:`cr-06`,category:`Complexity & Ruby`,question:`What Ruby 3.2 class creates small immutable value objects?`,answer:`Data.define.`,detail:`Use Struct instead when member writers or mutable container behavior are required.`},{id:`cr-07`,category:`Complexity & Ruby`,question:`How do you compare compound keys in Ruby?`,answer:`Use arrays, such as [time, sequence] <=> [other_time, other_sequence].`,detail:`Array comparison is lexicographic and is useful for deterministic tie-breaks.`},{id:`cr-08`,category:`Complexity & Ruby`,question:`How do you copy a mutable backtracking path?`,answer:`path.dup.`,detail:`Saving path itself would store multiple references to one changing array.`},{id:`cr-09`,category:`Complexity & Ruby`,question:`What do (0...n) and (0..n) mean?`,answer:`Three dots exclude n; two dots include n.`,detail:`Exclusive ranges are common for array indexes.`},{id:`cr-10`,category:`Complexity & Ruby`,question:`Why prefer iteration over deep recursion in Ruby?`,answer:`Ruby has a relatively limited call stack.`,detail:`A highly skewed tree or deep graph can cause SystemStackError.`},{id:`ar-01`,category:`Architecture`,question:`What should you do before drawing a system?`,answer:`Clarify functional requirements, scale, and quality priorities.`,detail:`The architecture depends on which features and trade-offs actually matter.`},{id:`ar-02`,category:`Architecture`,question:`What are the four main quality dimensions in this interview?`,answer:`Scalability, latency, performance, and failure handling.`,detail:`Tie every major design choice back to one or more of these.`},{id:`ar-03`,category:`Architecture`,question:`What is horizontal scaling?`,answer:`Adding more service instances rather than making one machine larger.`,detail:`It usually requires stateless request handling or externalized session state.`},{id:`ar-04`,category:`Architecture`,question:`Why cache data?`,answer:`To reduce latency and load on a slower source.`,detail:`Always discuss invalidation, staleness, misses, and cache failure.`},{id:`ar-05`,category:`Architecture`,question:`When should work move to a queue?`,answer:`When it can complete asynchronously or needs buffering/retries.`,detail:`Queues decouple producers and consumers but add delay and duplicate-delivery concerns.`},{id:`ar-06`,category:`Architecture`,question:`What makes a retried operation safe?`,answer:`Idempotency: repeating it has the same effect as doing it once.`,detail:`Use an idempotency key or durable operation identity.`},{id:`ar-07`,category:`Architecture`,question:`What does at-least-once delivery imply?`,answer:`A message may be delivered more than once.`,detail:`Consumers must deduplicate or make processing idempotent.`},{id:`ar-08`,category:`Architecture`,question:`What is replication primarily for?`,answer:`Availability, durability, and sometimes read scaling.`,detail:`It introduces replication lag and consistency trade-offs.`},{id:`ar-09`,category:`Architecture`,question:`What is partitioning or sharding?`,answer:`Splitting a dataset across machines by a partition key.`,detail:`Discuss hot keys, rebalancing, and cross-partition operations.`},{id:`ar-10`,category:`Architecture`,question:`What is backpressure?`,answer:`Slowing or rejecting producers when consumers cannot keep up.`,detail:`Without it, queues and memory can grow until the system fails.`},{id:`ar-11`,category:`Architecture`,question:`What is a good first API discussion?`,answer:`Core operations, request/response shape, pagination, and idempotency.`,detail:`The API clarifies system boundaries before components are chosen.`},{id:`ar-12`,category:`Architecture`,question:`What should an observability plan include?`,answer:`Metrics, logs, traces, and actionable alerts.`,detail:`Name service-level signals such as error rate, latency, saturation, and queue age.`},{id:`ar-13`,category:`Architecture`,question:`What is the CAP trade-off during a network partition?`,answer:`Choose consistency or availability for a given operation.`,detail:`Do not describe an entire system as simply CP or AP; requirements differ by operation.`},{id:`ar-14`,category:`Architecture`,question:`Why use a CDN for media?`,answer:`To serve cached bytes near users and offload origin traffic.`,detail:`Uploads still need durable origin storage, authorization, and processing.`},{id:`ar-15`,category:`Architecture`,question:`Why should you avoid naming a tool as the whole design?`,answer:`A product name does not explain the capability, data flow, or trade-off.`,detail:`Say what the component must guarantee and why, then offer an implementation example.`}],O=[`All`,`Data structures`,`Patterns`,`Complexity & Ruby`,`Architecture`],k=(e,t)=>({label:e,href:t}),he={"ds-01":k(`Arrays, Hashes & Sets`,`/algorithms/arrays-hashes/`),"ds-02":k(`Stacks`,`/algorithms/stack/`),"ds-03":k(`Queues & BFS`,`/algorithms/queue-bfs/`),"ds-04":k(`Heaps`,`/algorithms/heap/`),"ds-05":k(`Heaps`,`/algorithms/heap/`),"ds-06":k(`Arrays, Hashes & Sets`,`/algorithms/arrays-hashes/`),"ds-07":k(`Queues & BFS`,`/algorithms/queue-bfs/`),"ds-08":k(`Graphs`,`/algorithms/graphs/`),"ds-09":k(`Linked Lists`,`/algorithms/linked-lists/`),"ds-10":k(`Union-Find from first principles`,`/algorithms/union-find/#primer`),"pt-01":k(`Sliding Window`,`/algorithms/sliding-window/`),"pt-02":k(`Two Pointers`,`/algorithms/two-pointers/`),"pt-03":k(`Queues & BFS`,`/algorithms/queue-bfs/`),"pt-04":k(`Backtracking`,`/algorithms/backtracking/`),"pt-05":k(`Binary Search`,`/algorithms/binary-search/`),"pt-06":k(`Prefix Sums`,`/algorithms/prefix-sums/`),"pt-07":k(`Trees`,`/algorithms/trees/`),"pt-08":k(`Graphs & Topological Sort`,`/algorithms/graphs/`),"pt-09":k(`Dynamic Programming`,`/algorithms/dynamic-programming/`),"pt-10":k(`Sorting & Greedy`,`/algorithms/sorting-greedy/`),"pt-11":k(`Monotonic Stacks`,`/algorithms/stack/`),"pt-12":k(`Heaps`,`/algorithms/heap/`),"pt-13":k(`Intervals`,`/algorithms/intervals/`),"pt-14":k(`Linked Lists`,`/algorithms/linked-lists/`),"pt-15":k(`Prefix Sums`,`/algorithms/prefix-sums/`),"cr-01":k(`Sorting & Greedy`,`/algorithms/sorting-greedy/`),"cr-02":k(`Graphs`,`/algorithms/graphs/`),"cr-03":k(`Dynamic Programming`,`/algorithms/dynamic-programming/`),"cr-04":k(`Arrays, Hashes & Sets`,`/algorithms/arrays-hashes/`),"cr-05":k(`Arrays, Hashes & Sets`,`/algorithms/arrays-hashes/`),"cr-06":k(`Ruby glossary`,`/ruby/`),"cr-07":k(`Ruby glossary`,`/ruby/`),"cr-08":k(`Backtracking`,`/algorithms/backtracking/`),"cr-09":k(`Ruby glossary`,`/ruby/`),"cr-10":k(`Trees & iterative DFS`,`/algorithms/trees/`),"ar-01":k(`Architecture framework`,`/architecture/`),"ar-02":k(`Architecture framework`,`/architecture/`),"ar-03":k(`Architecture framework`,`/architecture/`),"ar-04":k(`Social Feed case study`,`/architecture/social-feed/`),"ar-05":k(`Job Queue case study`,`/architecture/job-queue/`),"ar-06":k(`Job Queue case study`,`/architecture/job-queue/`),"ar-07":k(`Job Queue case study`,`/architecture/job-queue/`),"ar-08":k(`Architecture framework`,`/architecture/`),"ar-09":k(`Social Feed case study`,`/architecture/social-feed/`),"ar-10":k(`Job Queue case study`,`/architecture/job-queue/`),"ar-11":k(`Architecture framework`,`/architecture/`),"ar-12":k(`Architecture framework`,`/architecture/`),"ar-13":k(`Architecture trade-offs`,`/architecture/`),"ar-14":k(`Media Platform case study`,`/architecture/media-platform/`),"ar-15":k(`Architecture framework`,`/architecture/`)},ge=T.map(e=>({id:`lc-${e.id}`,category:`Problem drills`,question:e.prompt,answer:`#${e.number} ${e.title}`,detail:`Approach: ${e.approach}. Pattern: ${e.pattern}. Time: ${e.time}. Auxiliary space: ${e.space}.`})),_e=Object.fromEntries(T.map(e=>[`lc-${e.id}`,k(`${e.title} discussion`,`/problems/${e.id}/`)])),ve=`reprime-flashcards-v1`,ye=1440*60*1e3,be=[0,0,1,3,7,14],xe=[...me,...ge],Se=Object.fromEntries(xe.map(e=>[e.id,e]));function Ce(){try{return JSON.parse(localStorage.getItem(ve)||`{}`)}catch{return{}}}function we(e,t){let n=e===`problems`?ge:me;return e===`fundamentals`&&t!==`All`?n.filter(e=>e.category===t):n}function Te(e,t,n){let r=Date.now();return we(t,n).filter(t=>!e[t.id]||e[t.id].dueAt<=r).sort((t,n)=>(e[t.id]?.dueAt??0)-(e[n.id]?.dueAt??0)).map(e=>e.id)}function Ee(e){let t=new URLSearchParams(window.location.search),n=t.get(`deck`)===`problems`?`problems`:`fundamentals`,r=t.get(`problem`),i=r?`lc-${r}`:void 0;return{deck:n,queue:i&&Se[i]?[i]:Te(e,n,`All`)}}function De(){let e=(0,f.useMemo)(()=>Ce(),[]),t=(0,f.useMemo)(()=>Ee(e),[e]),[n,r]=(0,f.useState)(e),[i,a]=(0,f.useState)(t.deck),[o,s]=(0,f.useState)(`All`),[c,l]=(0,f.useState)(t.queue),[u,d]=(0,f.useState)(!1),[m,h]=(0,f.useState)(0),[g,_]=(0,f.useState)(0),y=c[0]?Se[c[0]]:void 0,x=y?he[y.id]||_e[y.id]:void 0,ee=(0,f.useMemo)(()=>{let e=new Set(we(i,`All`).map(e=>e.id)),t=Object.entries(n).filter(([t])=>e.has(t)).map(([,e])=>e);return{seen:t.length,mastered:t.filter(e=>e.box>=4).length,due:Te(n,i,`All`).length}},[n,i]),te=e=>{r(e),localStorage.setItem(ve,JSON.stringify(e))},S=(e,t=`All`,r=!1)=>{a(e),s(t);let i=we(e,t);l(r?i.map(e=>e.id):Te(n,e,t)),d(!1),h(0),_(0)},C=e=>{if(!y)return;let t=n[y.id]||{box:1,dueAt:0,correct:0,incorrect:0},r=e?Math.min(5,t.box+1):1;te({...n,[y.id]:{box:r,dueAt:e?Date.now()+be[r]*ye:Date.now(),correct:t.correct+ +!!e,incorrect:t.incorrect+ +!e}}),e?(l(e=>e.slice(1)),h(e=>e+1)):(l(e=>{let t=e.slice(1),n=Math.min(3,t.length);return[...t.slice(0,n),y.id,...t.slice(n)]}),_(e=>e+1)),d(!1)};return(0,f.useEffect)(()=>{let e=e=>{e.target instanceof HTMLSelectElement||e.target instanceof HTMLButtonElement||(e.code===`Space`&&(e.preventDefault(),d(!0)),u&&e.key===`1`&&C(!1),u&&e.key===`2`&&C(!0))};return window.addEventListener(`keydown`,e),()=>window.removeEventListener(`keydown`,e)}),(0,p.jsxs)(v,{active:`flashcards`,children:[(0,p.jsx)(b,{label:`Active recall · Leitner system`,title:`Flashcards`,reminder:`Commit to an answer before revealing it. If the approach or complexity felt fuzzy, choose Again—even if you were close.`,cues:[`say it aloud`,`include auxiliary space`,`Again is useful data`]}),(0,p.jsxs)(`section`,{className:`flash-section`,children:[(0,p.jsxs)(`aside`,{className:`flash-sidebar`,children:[(0,p.jsxs)(`div`,{className:`flash-primary-controls`,children:[(0,p.jsxs)(`div`,{className:`deck-switcher`,"aria-label":`Flashcard deck`,children:[(0,p.jsxs)(`button`,{type:`button`,"aria-pressed":i===`fundamentals`,className:i===`fundamentals`?`active`:``,onClick:()=>S(`fundamentals`),children:[`Fundamentals`,(0,p.jsx)(`span`,{children:`50 cards`})]}),(0,p.jsxs)(`button`,{type:`button`,"aria-pressed":i===`problems`,className:i===`problems`?`active`:``,onClick:()=>S(`problems`),children:[`Problem drills`,(0,p.jsxs)(`span`,{children:[ge.length,` cards`]})]})]}),(0,p.jsxs)(`div`,{className:`flash-stats`,"aria-label":`Deck progress`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`strong`,{children:ee.due}),(0,p.jsx)(`span`,{children:`Due now`})]}),(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`strong`,{children:ee.seen}),(0,p.jsx)(`span`,{children:`Seen`})]}),(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`strong`,{children:ee.mastered}),(0,p.jsx)(`span`,{children:`Box 4+`})]})]}),i===`fundamentals`?(0,p.jsxs)(`label`,{className:`filter-label`,children:[`Category`,(0,p.jsx)(`select`,{value:o,onChange:e=>S(i,e.target.value),children:O.map(e=>(0,p.jsx)(`option`,{children:e},e))})]}):(0,p.jsxs)(`div`,{className:`problem-deck-note`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Before revealing`}),(0,p.jsx)(`p`,{children:`Name the pattern, concrete approach, time, and auxiliary space.`})]})]}),(0,p.jsxs)(`div`,{className:`flash-secondary-controls`,children:[(0,p.jsxs)(`details`,{className:`leitner-explainer`,children:[(0,p.jsx)(`summary`,{children:`How repetition works`}),(0,p.jsxs)(`ol`,{children:[(0,p.jsxs)(`li`,{children:[(0,p.jsx)(`strong`,{children:`Again`}),` → Box 1, repeat shortly.`]}),(0,p.jsxs)(`li`,{children:[(0,p.jsx)(`strong`,{children:`Got it`}),` → advance one box.`]}),(0,p.jsx)(`li`,{children:`Higher boxes wait 1, 3, 7, then 14 days.`})]})]}),(0,p.jsx)(`button`,{type:`button`,className:`quiet-button`,onClick:()=>{window.confirm(`Reset all flashcard progress on this device?`)&&(localStorage.removeItem(ve),r({}),l(we(i,o).map(e=>e.id)),d(!1),h(0),_(0))},children:`Reset progress`})]})]}),(0,p.jsxs)(`div`,{className:`flash-workspace`,children:[(0,p.jsxs)(`div`,{className:`session-bar`,"aria-live":`polite`,children:[(0,p.jsxs)(`span`,{children:[c.length,` cards remaining`]}),(0,p.jsxs)(`span`,{children:[m,` correct · `,g,` again`]})]}),y?(0,p.jsxs)(`article`,{className:`flash-card ${u?`revealed`:``}`,children:[(0,p.jsxs)(`div`,{className:`flash-card-meta`,children:[(0,p.jsx)(`span`,{children:y.category}),(0,p.jsxs)(`span`,{children:[`Box `,n[y.id]?.box||1]})]}),(0,p.jsxs)(`div`,{className:`flash-question`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Question`}),(0,p.jsx)(`h2`,{children:y.question})]}),u?(0,p.jsxs)(`div`,{className:`flash-answer`,children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Answer`}),(0,p.jsx)(`h3`,{children:y.answer}),(0,p.jsx)(`p`,{children:y.detail}),x&&(0,p.jsxs)(`a`,{className:`flash-study-link`,href:x.href,target:`_blank`,rel:`noreferrer`,children:[(0,p.jsx)(`span`,{children:`Need more context?`}),(0,p.jsxs)(`strong`,{children:[`Study `,x.label,` ↗`]})]})]}):(0,p.jsxs)(`button`,{type:`button`,className:`reveal-button`,onClick:()=>d(!0),children:[`Reveal answer `,(0,p.jsx)(`kbd`,{children:`space`})]}),u&&(0,p.jsxs)(`div`,{className:`grade-buttons`,children:[(0,p.jsxs)(`button`,{type:`button`,className:`again-button`,onClick:()=>C(!1),children:[(0,p.jsx)(`span`,{children:`1`}),` Again`,(0,p.jsx)(`small`,{children:`Repeat after 3 cards`})]}),(0,p.jsxs)(`button`,{type:`button`,className:`got-button`,onClick:()=>C(!0),children:[(0,p.jsx)(`span`,{children:`2`}),` Got it`,(0,p.jsx)(`small`,{children:`Move to the next box`})]})]})]}):(0,p.jsxs)(`div`,{className:`session-complete`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Session complete`}),(0,p.jsx)(`h2`,{children:`Nothing else is due in this deck.`}),(0,p.jsxs)(`p`,{children:[`You marked `,m,` cards correct and sent `,g,` answers back for repetition.`]}),(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`button`,{className:`primary-button`,onClick:()=>S(i,o),children:`Check due cards`}),(0,p.jsx)(`button`,{className:`outline-button`,onClick:()=>S(i,o,!0),children:`Review this deck anyway`})]})]}),(0,p.jsxs)(`p`,{className:`keyboard-note`,children:[`Keyboard: `,(0,p.jsx)(`kbd`,{children:`space`}),` reveal · `,(0,p.jsx)(`kbd`,{children:`1`}),` again · `,(0,p.jsx)(`kbd`,{children:`2`}),` got it`]})]})]})]})}var Oe=[{task:`Add one array item`,use:`items.append(item)`,avoid:`items << item · items.push(item)`,reason:`append matches Python and reads clearly at interview speed.`},{task:`Remove the final array item`,use:`items.pop`,avoid:`items.pop(1)`,reason:`pop matches Python and naturally pairs with append for stacks.`},{task:`Keep matching items`,use:`items.filter { |item| valid?(item) }`,avoid:`items.select { ... } · items.find_all { ... }`,reason:`filter matches Python and describes the result directly.`},{task:`Transform every item`,use:`items.map { |item| transform(item) }`,avoid:`items.collect { ... }`,reason:`map is shared vocabulary across Ruby and Python.`},{task:`Find the first match`,use:`items.find { |item| valid?(item) }`,avoid:`items.detect { ... }`,reason:`find is the clearer, more portable name.`},{task:`Sum numeric items`,use:`items.sum`,avoid:`items.inject(0, :+) · items.reduce(0, :+)`,reason:`sum matches Python and states the operation without machinery.`},{task:`Test collection membership`,use:`items.include?(item)`,avoid:`items.member?(item)`,reason:`Ruby has no in operator; include? is the clearest native spelling.`},{task:`Store unique items`,use:`set = Set.new · set.add(item)`,avoid:`require 'set'`,reason:`Ruby 3.2 includes and autoloads Set; add also matches Python's vocabulary.`},{task:`Test hash-key membership`,use:`hash.key?(key)`,avoid:`hash.has_key?(key) · hash.include?(key)`,reason:`key? is explicit and distinguishes keys from values.`},{task:`Iterate with an index`,use:`items.each_with_index do |item, index|`,avoid:`items.each.with_index do |item, index|`,reason:`Ruby has no enumerate; each_with_index is the standard explicit form.`},{task:`Count array or string elements`,use:`items.length`,avoid:`items.size · items.count`,reason:`length makes the intent unambiguous; count may perform work or count matches.`},{task:`Sort without changing the input`,use:`items.sort · items.sort_by { |item| key(item) }`,avoid:`items.sort! · items.sort_by! { ... }`,reason:`Prefer a non-mutating result unless the problem explicitly permits input mutation.`},{task:`Create an immutable value record`,use:`Task = Data.define(:name, :priority)`,avoid:`Struct.new(:name, :priority)`,reason:`Data communicates immutable value semantics in Ruby 3.2.`},{task:`Create a mutable linked node`,use:`Node = Struct.new(:value, :next)`,avoid:`Node = Data.define(:value, :next)`,reason:`Linked-list algorithms rewire next, so the record must be mutable.`},{task:`Use an Array as a queue`,use:`queue.append(item) · item = queue[head] · head += 1`,avoid:`queue.shift`,reason:`append keeps Python-like vocabulary; a head index avoids Ruby's O(n) shift.`}],ke=[[`Shared vocabulary first`,`When Ruby exposes equivalent names, use the one that resembles Python: append, filter, map, find, sum.`],[`Explicit Ruby second`,`When there is no Python-shaped spelling, choose one precise Ruby form and reuse it everywhere.`],[`Mutation is deliberate`,`Prefer non-mutating collection methods unless the problem contract explicitly allows changing the input.`],[`Clarity beats cleverness`,`Use the form you can narrate and debug under interview pressure; terse syntax is not a goal.`]],Ae=`# Array as a stack
 stack = []
 stack.append("(")
 opener = stack.pop
@@ -5705,6 +5705,1025 @@ After deleting zero-count keys, \`cache.length\` is also the distinct count, but
 tracking it separately makes the zero-crossing invariant explicit.
 
 </details>
-`};function gn({problem:e}){let t=T.findIndex(t=>t.id===e.id),n=T[(t-1+T.length)%T.length],r=T[(t+1)%T.length],i=hn[e.id]||`## Discussion unavailable
+`},gn={"0001_two_sum":{sourceFile:`solution.rb`,code:`def two_sum(nums, target)
+  cache = {}
+  nums.each_with_index do |n, i|
+    needed_n = target - n
 
-This guide has not been generated yet.`,a=M.parse(i.replace(/^# .+\n+/,``),{async:!1}),o=(se[e.id]||[]).map(e=>ne[e]).filter(Boolean);return(0,p.jsxs)(v,{active:`problems`,children:[(0,p.jsx)(y,{kicker:`LeetCode ${e.number} · ${e.pattern}`,title:e.title,copy:e.prompt,children:(0,p.jsxs)(`div`,{className:`hero-metrics problem-metrics`,children:[(0,p.jsxs)(`span`,{children:[(0,p.jsx)(`small`,{children:`Approach`}),e.approach]}),(0,p.jsxs)(`span`,{children:[(0,p.jsx)(`small`,{children:`Time`}),e.time]}),(0,p.jsxs)(`span`,{children:[(0,p.jsx)(`small`,{children:`Space`}),e.space]})]})}),(0,p.jsxs)(`section`,{className:`section problem-detail-layout`,children:[(0,p.jsxs)(`aside`,{className:`detail-toc`,children:[(0,p.jsx)(`a`,{href:`/problems/`,children:`← All problems`}),(0,p.jsx)(`p`,{children:`Practice it`}),(0,p.jsx)(`a`,{href:`/flashcards/?deck=problems&problem=${e.id}`,children:`Open this flashcard ↗`}),(0,p.jsx)(`p`,{children:`Source`}),(0,p.jsx)(`a`,{href:`https://github.com/BrianSigafoos/leetcode-practice/tree/main/solutions/${e.id}`,target:`_blank`,rel:`noreferrer`,children:`Ruby solution ↗`})]}),(0,p.jsxs)(`div`,{className:`problem-detail-content`,children:[o.length>0&&(0,p.jsxs)(`nav`,{className:`related-algorithms`,"aria-label":`Related algorithm guides`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Related algorithm deep dives`}),(0,p.jsx)(`p`,{children:`Review the reusable pattern behind this solution.`})]}),(0,p.jsx)(`div`,{children:o.map(e=>(0,p.jsxs)(`a`,{href:`/algorithms/${e.id}/`,children:[(0,p.jsx)(`span`,{children:e.eyebrow}),(0,p.jsxs)(`strong`,{children:[e.title,` →`]})]},e.id))})]}),(0,p.jsx)(`article`,{className:`problem-markdown markdown-content`,dangerouslySetInnerHTML:{__html:a}})]})]}),(0,p.jsxs)(`nav`,{className:`next-guide`,children:[(0,p.jsxs)(`a`,{href:`/problems/${n.id}/`,children:[(0,p.jsx)(`small`,{children:`Previous problem`}),(0,p.jsxs)(`strong`,{children:[`← `,n.title]})]}),(0,p.jsxs)(`a`,{href:`/problems/${r.id}/`,children:[(0,p.jsx)(`small`,{children:`Next problem`}),(0,p.jsxs)(`strong`,{children:[r.title,` →`]})]})]})]})}function _n(){let[e,t]=(0,f.useState)(``),n=(0,f.useMemo)(()=>{let t=e.trim().toLowerCase();return t?T.filter(e=>[e.number,e.title,e.prompt,e.pattern,e.approach,e.time,e.space].join(` `).toLowerCase().includes(t)):T},[e]);return(0,p.jsxs)(v,{active:`problems`,children:[(0,p.jsx)(b,{label:`52 Ruby problem guides`,title:`Problems`,reminder:`Before opening a guide, say the likely pattern, the invariant, time complexity, and auxiliary space. A wrong guess is still a useful rep.`,cues:[`start with brute force`,`use constraints to optimize`,`state the invariant`,`test an edge case aloud`]}),(0,p.jsxs)(`section`,{className:`section problem-library`,children:[(0,p.jsxs)(`div`,{className:`library-toolbar`,children:[(0,p.jsxs)(`p`,{"aria-live":`polite`,children:[(0,p.jsx)(`strong`,{children:n.length===T.length?`${T.length} problem guides`:`${n.length} of ${T.length} guides`}),` Try the matching flashcard before reading the discussion.`]}),(0,p.jsxs)(`div`,{className:`search-box`,role:`search`,children:[(0,p.jsx)(`span`,{"aria-hidden":`true`,children:`⌕`}),(0,p.jsx)(`input`,{"aria-label":`Search problem guides`,value:e,onChange:e=>t(e.target.value),placeholder:`Search: sliding window, tree, O(log n)…`}),e&&(0,p.jsx)(`button`,{type:`button`,"aria-label":`Clear problem search`,onClick:()=>t(``),children:`×`})]})]}),(0,p.jsx)(`div`,{className:`problem-grid`,children:n.map(e=>(0,p.jsxs)(`a`,{className:`problem-card`,href:`/problems/${e.id}/`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsxs)(`span`,{children:[`#`,e.number]}),(0,p.jsx)(`em`,{children:e.pattern})]}),(0,p.jsx)(`h2`,{children:e.title}),(0,p.jsx)(`p`,{children:e.prompt}),(0,p.jsx)(`strong`,{children:e.approach}),(0,p.jsxs)(`dl`,{children:[(0,p.jsx)(`dt`,{children:`Time`}),(0,p.jsx)(`dd`,{children:e.time}),(0,p.jsx)(`dt`,{children:`Space`}),(0,p.jsx)(`dd`,{children:e.space})]})]},e.id))}),n.length===0&&(0,p.jsx)(`div`,{className:`no-results`,children:`No matching problem. Try an algorithm pattern or complexity.`})]})]})}function vn(){return window.location.pathname.replace(/\/+$/,``)||`/`}function yn(){return(0,p.jsx)(v,{children:(0,p.jsxs)(`section`,{className:`not-found`,id:`top`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`404`}),(0,p.jsx)(`h1`,{children:`This study path does not exist.`}),(0,p.jsx)(`p`,{children:`Return to the refresher or choose a topic from the navigation.`}),(0,p.jsx)(`a`,{className:`primary-button`,href:`/`,children:`Back home`})]})})}function bn(){let e=vn();if(e===`/`)return(0,p.jsx)(S,{});if(e===`/algorithms`)return(0,p.jsx)(ue,{});if(e===`/flashcards`)return(0,p.jsx)(De,{});if(e===`/architecture`)return(0,p.jsx)(pe,{});if(e===`/ruby`)return(0,p.jsx)(je,{});if(e===`/problems`)return(0,p.jsx)(_n,{});let t=e.match(/^\/problems\/([^/]+)$/);if(t){let e=le[t[1]];return e?(0,p.jsx)(gn,{problem:e}):(0,p.jsx)(yn,{})}let n=e.match(/^\/algorithms\/([^/]+)$/);if(n){let e=ne[n[1]];return e?(0,p.jsx)(D,{algorithm:e}):(0,p.jsx)(yn,{})}let r=e.match(/^\/architecture\/([^/]+)$/);if(r){let e=ie[r[1]];return e?(0,p.jsx)(fe,{guide:e}):(0,p.jsx)(yn,{})}return(0,p.jsx)(yn,{})}(0,d.createRoot)(document.getElementById(`root`)).render((0,p.jsx)(f.StrictMode,{children:(0,p.jsx)(bn,{})}));
+    return [cache[needed_n], i] if cache.key?(needed_n)
+
+    cache[n] = i
+  end
+end`},"0003_longest_substring":{sourceFile:`solution.rb`,code:`def length_of_longest_substring(s)
+  last_seen = {}
+  left = 0
+  max_length = 0
+
+  s.each_char.with_index do |char, right|
+    previous_index = last_seen[char]
+
+    # Interview invariant: left never moves backward.
+    left = [left, previous_index + 1].max if previous_index
+
+    current_length = right - left + 1
+    max_length = [max_length, current_length].max
+    last_seen[char] = right
+  end
+
+  max_length
+end`},"0015_3sum":{sourceFile:`3sum.rb`,code:`def three_sum(nums)
+  sorted = nums.sort
+  triplets = []
+
+  sorted.each_with_index do |num, idx|
+    next if num == sorted[idx - 1] && idx != 0
+
+    triplets = two_sum_ii(sorted, num, idx, triplets)
+  end
+
+  triplets
+end
+
+def two_sum_ii(sorted, num, idx, triplets)
+  left = idx + 1
+  right = sorted.length - 1
+
+  while left < right
+    sum = num + sorted[left] + sorted[right]
+
+    if sum < 0
+      left += 1
+    elsif sum > 0
+      right -= 1
+    else # sum == 0
+      triplets.append([num, sorted[left], sorted[right]])
+      left += 1
+      right -= 1
+
+      while left < right && sorted[left] == sorted[left - 1]
+        left += 1
+      end
+    end
+  end
+
+  triplets
+end`},"0020_valid_parentheses":{sourceFile:`solution.rb`,code:`def is_valid(s)
+  parentheses = { '{' => '}', '[' => ']', '(' => ')' }
+  stack = []
+
+  s.each_char do |c|
+    if parentheses[c]
+      stack.append(c)
+      next
+    end
+
+    return false if parentheses[stack.pop] != c
+  end
+
+  stack.empty?
+end`},"0021_merge_two_sorted_lists":{sourceFile:`solution.rb`,code:`def merge_two_lists(list1, list2)
+  prehead = ListNode.new
+  tail = prehead
+
+  while list1 && list2
+    if list1.val <= list2.val
+      tail.next = list1
+      list1 = list1.next # Advance list1
+    else
+      tail.next = list2
+      list2 = list2.next # Advance list2
+    end
+
+    tail = tail.next
+  end
+
+  tail.next = list1.nil? ? list2 : list1
+
+  prehead.next
+end`},"0033_search_rotated_array":{sourceFile:`solution.rb`,code:`def search(nums, target)
+  left = 0
+  right = nums.length - 1
+
+  while left <= right
+    pivot = left + ((right - left) / 2)
+    return pivot if nums[pivot] == target
+
+    if nums[pivot] >= nums[left]
+      if target >= nums[left] && target < nums[pivot]
+        right = pivot - 1
+      else
+        left = pivot + 1
+      end
+
+    elsif target <= nums[right] && target > nums[pivot]
+      left = pivot + 1
+    else
+      right = pivot - 1
+    end
+  end
+
+  -1
+end`},"0039_combination_sum":{sourceFile:`solution.rb`,code:`def combination_sum(candidates, target)
+  sorted = candidates.sort
+  result = []
+  build_combinations(sorted, target, 0, [], result)
+  result
+end
+
+def build_combinations(candidates, remaining, start, current, result)
+  if remaining.zero?
+    result.append(current.dup)
+    return
+  end
+
+  (start...candidates.length).each do |index|
+    candidate = candidates[index]
+    break if candidate > remaining
+
+    current.append(candidate)
+    build_combinations(candidates, remaining - candidate, index, current, result)
+    current.pop
+  end
+end`},"0046_permutations":{sourceFile:`solution.rb`,code:`def permute(nums)
+  result = []
+  build_permutations(nums, Array.new(nums.length, false), [], result)
+  result
+end
+
+def build_permutations(nums, used, current, result)
+  if current.length == nums.length
+    result.append(current.dup)
+    return
+  end
+
+  nums.each_index do |index|
+    next if used[index]
+
+    used[index] = true
+    current.append(nums[index])
+    build_permutations(nums, used, current, result)
+    current.pop
+    used[index] = false
+  end
+end`},"0053_maximum_subarray":{sourceFile:`solution.rb`,code:`def max_sub_array(nums)
+  current_sub_array = nums[0]
+  max_sum = nums[0]
+
+  nums[1..].each do |n|
+    current_sub_array = [n, current_sub_array + n].max
+    max_sum = [current_sub_array, max_sum].max
+  end
+
+  max_sum
+end`},"0056_merge_intervals":{sourceFile:`merge_intervals.rb`,code:`def merge(intervals)
+  sorted = intervals.sort.map(&:dup)
+  merged = []
+
+  sorted.each do |interval|
+    prev = merged[-1]
+
+    if merged.empty? || interval[0] > prev[1]
+      merged.append(interval)
+    else
+      prev[1] = [prev[1], interval[1]].max
+    end
+  end
+
+  merged
+end`},"0057_insert_interval":{sourceFile:`insert_interval.rb`,code:`def insert(intervals, new_interval)
+  new_interval = new_interval.dup
+  output = []
+  i = 0
+
+  while i < intervals.length && intervals[i][1] < new_interval[0]
+    output.append(intervals[i])
+    i += 1
+  end
+
+  while i < intervals.length && intervals[i][0] <= new_interval[1]
+    new_interval[0] = [intervals[i][0], new_interval[0]].min
+    new_interval[1] = [intervals[i][1], new_interval[1]].max
+    i += 1
+  end
+  output.append(new_interval)
+
+  while i < intervals.length
+    output.append(intervals[i])
+    i += 1
+  end
+
+  output
+end`},"0067_add_binary":{sourceFile:`add_binary.rb`,code:`def add_binary(a, b)
+  left = a.length - 1
+  right = b.length - 1
+  carry = 0
+  digits = []
+
+  while left >= 0 || right >= 0 || carry.positive?
+    total = carry
+    total += a.getbyte(left) - 48 if left >= 0
+    total += b.getbyte(right) - 48 if right >= 0
+
+    digits.append((total % 2).to_s)
+    carry = total / 2
+    left -= 1
+    right -= 1
+  end
+
+  digits.reverse.join
+end`},"0070_climbing_stairs":{sourceFile:`climbing_stairs.rb`,code:`def climb_stairs(n)
+  cache = [0, 1, 2]
+
+  while cache.length <= n
+    next_value = cache[-1] + cache[-2]
+    cache.append(next_value)
+  end
+
+  cache[n]
+end`},"0076_min_window_substring":{sourceFile:`solution.rb`,code:`def min_window(s, t)
+  return '' if t.empty? || t.length > s.length
+
+  needed = Hash.new(0)
+  t.each_char { |char| needed[char] += 1 }
+
+  window = Hash.new(0)
+  required = needed.length
+  formed = 0
+  left = 0
+  best_start = 0
+  best_length = Float::INFINITY
+
+  s.each_char.with_index do |char, right|
+    window[char] += 1
+    formed += 1 if needed.key?(char) && window[char] == needed[char]
+
+    while formed == required
+      length = right - left + 1
+      if length < best_length
+        best_start = left
+        best_length = length
+      end
+
+      removed = s[left]
+      window[removed] -= 1
+      formed -= 1 if needed.key?(removed) && window[removed] < needed[removed]
+      left += 1
+    end
+  end
+
+  best_length.infinite? ? '' : s[best_start, best_length]
+end`},"0102_binary_tree_level_order":{sourceFile:`solution.rb`,code:`def level_order(root)
+  output = []
+  return output if root.nil?
+
+  queue = [root]
+  head = 0
+
+  while head < queue.length
+    level_nodes = []
+    level_length = queue.length - head
+
+    level_length.times do
+      node = queue[head]
+      head += 1
+      level_nodes.append(node.val)
+      queue.append(node.left)  if node.left
+      queue.append(node.right) if node.right
+    end
+
+    output.append(level_nodes)
+  end
+
+  output
+end`},"0104_max_depth_of_binary_tree":{sourceFile:`max_depth_of_binary_tree.rb`,code:`def max_depth(root)
+  return 0 unless root
+
+  left = max_depth(root.left)
+  right = max_depth(root.right)
+
+  [left, right].max + 1
+end`},"0110_balanced_binary_tree":{sourceFile:`0110_balanced_binary_tree.rb`,code:`def is_balanced(root)
+  balanced_height(root)[0]
+end
+
+def balanced_height(root)
+  return [true, -1] unless root
+
+  l_balanced, l_height = balanced_height(root.left)
+  return [false, 0] unless l_balanced
+
+  r_balanced, r_height = balanced_height(root.right)
+  return [false, 0] unless r_balanced
+
+  balanced_bool = (l_height - r_height).abs <= 1
+  height_n = [l_height, r_height].max + 1
+
+  [balanced_bool, height_n]
+end`},"0121_best_time_buy_sell_stock":{sourceFile:`solution.rb`,code:`def max_profit(prices)
+  min_price = prices.first
+  max_amount = 0
+
+  prices.each do |price|
+    if price < min_price
+      min_price = price
+      next
+    end
+
+    max_amount = [max_amount, price - min_price].max
+  end
+
+  max_amount
+end`},"0125_valid_palindrome":{sourceFile:`solution.rb`,code:`def is_palindrome(s)
+  left = 0
+  right = s.length - 1
+
+  while left < right
+    unless s[left].downcase.match?(/[a-z\\d]/)
+      left += 1
+      next
+    end
+
+    unless s[right].downcase.match?(/[a-z\\d]/)
+      right -= 1
+      next
+    end
+
+    unless s[left].casecmp(s[right]).zero?
+      return false
+    end
+
+    left += 1
+    right -= 1
+  end
+
+  true
+end`},"0133_clone_graph":{sourceFile:`solution.rb`,code:`def clone_graph(node)
+  return nil if node.nil?
+
+  queue = [node]
+  next_index = 0
+  clones = { node => Node.new(node.val) }
+
+  while next_index < queue.length
+    current = queue[next_index]
+    next_index += 1
+    current_clone = clones[current]
+
+    current.neighbors.each do |neighbor|
+      unless clones.key?(neighbor)
+        clones[neighbor] = Node.new(neighbor.val)
+        queue.append(neighbor)
+      end
+
+      current_clone.neighbors.append(clones[neighbor])
+    end
+  end
+
+  clones[node]
+end`},"0136_single_number":{sourceFile:`solution.rb`,code:`def single_number(nums)
+  result = 0
+
+  nums.each do |n|
+    result = result ^ n
+  end
+
+  result
+end`},"0141_linked_list_cycle":{sourceFile:`linked_list_cycle.rb`,code:`def has_cycle(head)
+  return false if head.nil?
+
+  slow = head
+  fast = head.next
+
+  while slow != fast
+    return false if fast.nil? || fast.next.nil?
+
+    slow = slow.next
+    fast = fast.next.next
+  end
+
+  true
+end`},"0150_eval_reverse_polish":{sourceFile:`solution.rb`,code:`def eval_rpn(tokens)
+  stack = []
+  operators = %w[+ - * /]
+
+  tokens.each do |token|
+    unless operators.include?(token)
+      stack.append(token.to_i)
+      next
+    end
+
+    right = stack.pop # number 2
+    left = stack.pop  # number 1
+    result = apply_operator(token, left, right)
+    stack.append(result)
+  end
+
+  stack.pop
+end
+
+def apply_operator(operator, left, right)
+  case operator
+  when '+'
+    left + right
+  when '-'
+    left - right
+  when '*'
+    left * right
+  when '/'
+    (left.to_f / right).to_i
+  end
+end`},"0155_min_stack":{sourceFile:`0155_min_stack.rb`,code:`class MinStack
+  def initialize
+    @stack = []
+  end
+
+  def push(val)
+    current_minimum = val if stack.empty?
+    current_minimum ||= [top_val_and_min[1], val].min
+
+    stack.append([val, current_minimum])
+  end
+
+  def pop
+    stack.pop[0]
+  end
+
+  def top
+    top_val_and_min[0]
+  end
+
+  def get_min
+    top_val_and_min[1]
+  end
+
+  private
+
+  attr_reader :stack
+
+  def top_val_and_min
+    stack.last
+  end
+end`},"0169_majority_element":{sourceFile:`majority_element.rb`,code:`def majority_element(nums)
+  candidate = nil
+  count = 0
+
+  nums.each do |n|
+    candidate = n if count.zero?
+
+    val = candidate == n ? 1 : -1
+    count += val
+  end
+
+  candidate
+end`},"0200_number_of_islands":{sourceFile:`solution.rb`,code:`LAND = '1'
+VISITED = '2'
+
+def num_islands(grid)
+  count = 0
+  rows = grid.length
+  cols = grid.first.length
+
+  rows.times do |r|
+    cols.times do |c|
+      next unless grid[r][c] == LAND
+
+      visit_neighbors_bfs(grid, r, c)
+      count += 1
+    end
+  end
+
+  count
+end
+
+def visit_neighbors_bfs(grid, row, column)
+  queue = [[row, column]]
+  next_index = 0
+  rows = grid.length
+  cols = grid.first.length
+  grid[row][column] = VISITED
+
+  while next_index < queue.length
+    r, c = queue[next_index]
+    next_index += 1
+
+    neighbors = [[r, c + 1], [r, c - 1], [r - 1, c], [r + 1, c]]
+    neighbors.each do |next_row, next_column|
+      next unless next_row.between?(0, rows - 1)
+      next unless next_column.between?(0, cols - 1)
+      next unless grid[next_row][next_column] == LAND
+
+      grid[next_row][next_column] = VISITED
+      queue.append([next_row, next_column])
+    end
+  end
+end`},"0206_reverse_linked_list":{sourceFile:`reverse_linked_list.rb`,code:`def reverse_list(head)
+  prev = nil
+  curr = head
+
+  while curr
+    next_temp = curr.next
+    curr.next = prev
+    prev = curr
+    curr = next_temp
+  end
+
+  prev
+end`},"0207_course_schedule":{sourceFile:`solution.rb`,code:`def can_finish(num_courses, prerequisites)
+  prereq_for = {}
+  num_required = {}
+  queue = []
+  next_index = 0
+
+  (0...num_courses).each do |i|
+    prereq_for[i] = []
+    num_required[i] = 0
+  end
+
+  prerequisites.each do |classes|
+    prereq = classes[1]
+    dependent = classes[0]
+    prereq_for[prereq].append(dependent)
+    num_required[dependent] += 1
+  end
+
+  num_required.each do |course, count|
+    queue.append(course) if count.zero?
+  end
+
+  while next_index < queue.length
+    course = queue[next_index]
+    next_index += 1
+    num_courses -= 1
+    next if prereq_for[course].nil?
+
+    prereq_for[course].each do |prereq|
+      num_required[prereq] -= 1
+      queue.append(prereq) if (num_required[prereq]).zero?
+    end
+  end
+
+  num_courses.zero?
+end`},"0208_implement_trie":{sourceFile:`solution.rb`,code:`class TrieNode
+  attr_accessor :children, :end_node
+
+  def initialize
+    @children = {}
+    @end_node = false # is possible word
+  end
+end
+
+class Trie
+  attr_accessor :root
+
+  def initialize
+    @root = TrieNode.new
+  end
+
+  def insert(word)
+    node = root
+    word.chars.each do |char|
+      node.children[char] = TrieNode.new unless node.children[char]
+      node = node.children[char]
+    end
+    node.end_node = true
+  end
+
+  def search(word)
+    node = traverse(word)
+
+    !node.nil? && node.end_node
+  end
+
+  def starts_with(prefix)
+    node = traverse(prefix)
+    !node.nil?
+  end
+
+  private
+
+  def traverse(string)
+    node = root
+
+    string.chars.each do |char|
+      return nil unless node.children[char]
+
+      node = node.children[char]
+    end
+
+    node
+  end
+end`},"0216_combination_sum_3":{sourceFile:`solution.rb`,code:`def combination_sum3(k, n)
+  start = 1
+  length = k
+  target = n
+  current = []
+  result = []
+
+  backtrack(start, length, target, 0, current, result)
+end
+
+def backtrack(start, length, target, total, current, result)
+  if current.length == length
+    result.append(current.dup) if total == target
+    return result
+  end
+
+  (start..9).each do |i|
+    new_total = total + i
+    break if new_total > target
+
+    current.append(i)
+    backtrack(i + 1, length, target, new_total, current, result)
+    current.pop
+  end
+
+  result
+end`},"0217_contains_duplicates":{sourceFile:`contains_duplicates.rb`,code:`def contains_duplicate(nums)
+  cache = {}
+  nums.each do |n|
+    return true if cache[n]
+
+    cache[n] = 1
+  end
+
+  false
+end`},"0226_invert_binary_tree":{sourceFile:`invert_binary_tree.rb`,code:`def invert_tree(root)
+  return if root.nil?
+
+  right = invert_tree(root.right)
+  left = invert_tree(root.left)
+  root.right = left
+  root.left = right
+  root
+end`},"0232_queue_using_stacks":{sourceFile:`implement_queue_using_stacks.rb`,code:`class MyQueue
+  def initialize
+    @input = []
+    @output = []
+  end
+
+  def push(x)
+    input.append(x)
+  end
+
+  def pop
+    peek
+    output.pop
+  end
+
+  def peek
+    if output.empty?
+      until input.empty?
+        output.append(input.pop)
+      end
+    end
+
+    output.last
+  end
+
+  def empty
+    input.empty? && output.empty?
+  end
+
+  private
+
+  attr_reader :input, :output
+end`},"0235_lca_binary_search_tree":{sourceFile:`lca_binary_search_tree.rb`,code:`def lowest_common_ancestor(root, p, q)
+  node = root
+
+  while node
+    if p.val > node.val && q.val > node.val
+      node = node.right
+
+    elsif p.val < node.val && q.val < node.val
+      node = node.left
+
+    else
+      return node
+    end
+  end
+end`},"0238_product_of_array":{sourceFile:`solution.rb`,code:`def product_except_self(nums)
+  answer = []
+  max_array_idx = nums.length - 1
+
+  answer[0] = 1
+  (1..max_array_idx).each do |i|
+    answer[i] = answer[i - 1] * nums[i - 1]
+  end
+
+  right = 1
+  (1..nums.length).each do |i|
+    answer[-i] = answer[-i] * right
+    right *= nums[-i]
+  end
+
+  answer
+end`},"0242_valid_anagram":{sourceFile:`solution.rb`,code:`def is_anagram(s, t)
+  return false if s.length != t.length
+
+  cache = s.each_char.tally
+
+  t.each_char do |c|
+    return false if cache[c].nil? || cache[c].zero?
+
+    cache[c] -= 1
+  end
+
+  true
+end`},"0252_meeting_rooms":{sourceFile:`solution.rb`,code:`def can_attend_meetings(intervals)
+  sorted_intervals = intervals.sort
+
+  sorted_intervals.each_with_index do |interval, idx|
+    break if idx + 1 >= intervals.length
+
+    return false if  interval[1] > sorted_intervals[idx + 1][0]
+  end
+
+  true
+end`},"0278_first_bad_version":{sourceFile:`solution.rb`,code:`def first_bad_version(n, bad_version: nil)
+  bad_version ||= method(:is_bad_version)
+  left = 1
+  right = n
+
+  while left < right
+    mid = left + ((right - left) / 2)
+
+    if bad_version.call(mid)
+      right = mid
+    else
+      left = mid + 1
+    end
+  end
+
+  left
+end`},"0322_coin_change":{sourceFile:`solution.rb`,code:`def coin_change(coins, amount)
+  max = amount + 1
+  cache = Array.new(amount + 1, max)
+  cache[0] = 0
+
+  (1..amount).each do |i|
+    coins.each do |coin|
+      if coin <= i
+        new_possibility = cache[i - coin] + 1
+        cache[i] = [cache[i], new_possibility].min
+      end
+    end
+  end
+
+  return -1 if cache[amount] > amount
+
+  cache[amount]
+end`},"0383_ransom_note":{sourceFile:`solution.rb`,code:`def can_construct(ransom_note, magazine)
+  return false if ransom_note.length > magazine.length
+
+  cache = magazine.each_char.tally
+
+  ransom_note.each_char do |c|
+    return false if cache[c].nil? || cache[c].zero?
+
+    cache[c] -= 1
+  end
+
+  true
+end`},"0409_longest_palindrome":{sourceFile:`longest_palindrome.rb`,code:`def longest_palindrome(s)
+  cache = s.each_char.tally
+
+  answer = 0
+  cache.each_value do |v|
+    answer += v / 2 * 2
+    answer += 1 if answer.even? && v.odd?
+  end
+
+  answer
+end`},"0509_fibonacci_number":{sourceFile:`fibonacci_number_1.rb`,code:`def fib(n)
+  return n if n < 2
+
+  previous = 0
+  current = 1
+
+  2.upto(n) do
+    previous, current = current, previous + current
+  end
+
+  current
+end`},"0535_encode_decode_tinyurl":{sourceFile:`solution.rb`,code:`require 'securerandom'
+
+def encode(long_url)
+  short_code = random_alpha_num
+
+  short_code = random_alpha_num while cache[short_code]
+
+  cache[short_code] = long_url
+  "http://tinyurl.com/#{short_code}"
+end
+
+def decode(short_url)
+  short_code = short_url.gsub('http://tinyurl.com/', '')
+  cache[short_code]
+end
+
+def cache
+  @cache ||= {}
+end
+
+def random_alpha_num(length = 6)
+  SecureRandom.alphanumeric(length)
+end`},"0542_01_matrix":{sourceFile:`01_matrix.rb`,code:`def update_matrix(mat)
+  rows = mat.length
+  cols = mat[0].length
+  max_distance = rows + cols
+
+  output = Array.new(rows).map { Array.new(cols, max_distance) }
+
+  rows.times do |i|
+    cols.times do |j|
+      if mat[i][j] == 0
+        output[i][j] = 0
+        next
+      end
+
+      current = output[i][j]
+      above = output[i - 1][j] + 1 if i.positive?
+      left  = output[i][j - 1] + 1 if j.positive?
+      output[i][j] = [current, above, left].compact.min
+    end
+  end
+
+  rows.times do |i|
+    k = rows - i - 1
+    cols.times do |j|
+      l = cols - j - 1
+      current = output[k][l]
+      below = output[k + 1][l] + 1 if k + 1 < rows
+      right = output[k][l + 1] + 1 if l + 1 < cols
+      output[k][l] = [current, below, right].compact.min
+    end
+  end
+
+  output
+end`},"0543_diameter_of_binary_tree":{sourceFile:`diameter_of_binary_tree.rb`,code:`def diameter_of_binary_tree(root)
+  _diameter, max = diameter_of_nodes(root)
+  max
+end
+
+def diameter_of_nodes(node, max = 0)
+  return [0, max] unless node
+
+  left, l_max = diameter_of_nodes(node.left, max)
+  right, r_max = diameter_of_nodes(node.right, max)
+
+  max = [l_max, r_max, (left + right)].max
+
+  longest = [left, right].max + 1
+
+  [longest, max]
+end`},"0704_binary_search":{sourceFile:`binary_search.rb`,code:`def search(nums, target)
+  left = 0
+  right = nums.length - 1
+
+  while left <= right
+    pivot = left + ((right - left) / 2)
+    return pivot if nums[pivot] == target
+
+    if nums[pivot] > target
+      right = pivot - 1
+    else
+      left = pivot + 1
+    end
+  end
+
+  -1
+end`},"0733_flood_fill":{sourceFile:`flood_fill_1.rb`,code:`def flood_fill(image, sr, sc, new_color)
+  old_color = image[sr][sc]
+  return image if new_color == old_color
+
+  rows_n = image.length
+  cols_n = image[0].length
+  dfs(image:, r: sr, c: sc, old_color:, new_color:, rows_n:, cols_n:)
+
+  image
+end
+
+def dfs(image:, r:, c:, old_color:, new_color:, rows_n:, cols_n:)
+  return if image[r][c] != old_color
+
+  image[r][c] = new_color
+
+  opts = { image:, old_color:, new_color:, rows_n:, cols_n: }
+  dfs(r: r - 1, c:, **opts) if r - 1 >= 0      # Up
+  dfs(r:, c: c + 1, **opts) if c + 1 < cols_n  # Right
+  dfs(r: r + 1, c:, **opts) if r + 1 < rows_n  # Down
+  dfs(r:, c: c - 1, **opts) if c - 1 >= 0      # Left
+end`},"0876_middle_of_linked_list":{sourceFile:`middle_of_linked_list.rb`,code:`def middle_node(head)
+  slow = head
+  fast = head
+
+  until fast.nil? || fast.next.nil?
+    slow = slow.next
+    fast = fast.next.next
+  end
+
+  slow
+end`},"0973_k_closest_points":{sourceFile:`solution.rb`,code:`def k_closest(points, k)
+  points.sort_by { |x, y| (x * x) + (y * y) }.first(k)
+end`},"0981_time_based_kv_store":{sourceFile:`solution.rb`,code:`class TimeMap
+  attr_reader :cache
+
+  def initialize
+    @cache = {}
+  end
+
+  def set(key, value, timestamp)
+    cache[key] = [] unless cache[key]
+    cache[key].append([timestamp, value])
+  end
+
+  def get(key, timestamp)
+    return '' unless cache.key?(key)
+
+    ts_values = cache[key]
+    left = 0
+    right = ts_values.length - 1
+    answer = ''
+
+    while left <= right
+      pivot = left + ((right - left) / 2)
+
+      ts = ts_values[pivot][0]
+      if ts > timestamp
+        right = pivot - 1
+      else
+        answer = ts_values[pivot][1]
+        left = pivot + 1
+      end
+    end
+
+    answer
+  end
+end`},"0994_rotting_oranges":{sourceFile:`solution.rb`,code:`FRESH = 1
+ROTTEN = 2
+def oranges_rotting(grid)
+  rows = grid.length
+  cols = grid[0].length
+  queue = []
+  fresh = 0
+
+  rows.times do |r|
+    cols.times do |c|
+      queue.append([r, c, 0]) if grid[r][c] == ROTTEN
+      fresh += 1 if grid[r][c] == FRESH
+    end
+  end
+
+  minutes = 0
+  head = 0
+  directions = [[-1, 0], [1, 0], [0, -1], [0, 1]]
+
+  while head < queue.length
+    row, col, minute = queue[head]
+    head += 1
+    minutes = [minutes, minute].max
+
+    directions.each do |row_delta, col_delta|
+      next_row = row + row_delta
+      next_col = col + col_delta
+      next unless next_row.between?(0, rows - 1) && next_col.between?(0, cols - 1)
+      next unless grid[next_row][next_col] == FRESH
+
+      grid[next_row][next_col] = ROTTEN
+      fresh -= 1
+      queue.append([next_row, next_col, minute + 1])
+    end
+  end
+
+  fresh.zero? ? minutes : -1
+end`},"1852_distinct_nums_subarray":{sourceFile:`solution.rb`,code:`def distinct_numbers(nums, k)
+  results = []
+  cache = Hash.new(0)
+  counter = 0
+
+  i = 0
+  while i <= nums.length - 1
+    n = nums[i]
+    counter += 1 if cache[n].zero?
+    cache[n] += 1
+
+    i += 1
+    next unless i > k - 1
+
+    prev_idx = i - k - 1
+    if prev_idx >= 0
+      prev_n = nums[prev_idx]
+      cache[prev_n] -= 1
+      if cache[prev_n].zero?
+        counter -= 1
+        cache.delete(prev_n)
+      end
+    end
+
+    results.append(counter)
+  end
+
+  results
+end`}};function _n({problem:e}){let t=T.findIndex(t=>t.id===e.id),n=T[(t-1+T.length)%T.length],r=T[(t+1)%T.length],i=hn[e.id]||`## Discussion unavailable
+
+This guide has not been generated yet.`,a=gn[e.id],o=M.parse(i.replace(/^# .+\n+/,``),{async:!1}),s=(se[e.id]||[]).map(e=>ne[e]).filter(Boolean);return(0,p.jsxs)(v,{active:`problems`,children:[(0,p.jsx)(y,{kicker:`LeetCode ${e.number} · ${e.pattern}`,title:e.title,copy:e.prompt,children:(0,p.jsxs)(`div`,{className:`hero-metrics problem-metrics`,children:[(0,p.jsxs)(`span`,{children:[(0,p.jsx)(`small`,{children:`Approach`}),e.approach]}),(0,p.jsxs)(`span`,{children:[(0,p.jsx)(`small`,{children:`Time`}),e.time]}),(0,p.jsxs)(`span`,{children:[(0,p.jsx)(`small`,{children:`Space`}),e.space]})]})}),(0,p.jsxs)(`section`,{className:`section problem-detail-layout`,children:[(0,p.jsxs)(`aside`,{className:`detail-toc`,children:[(0,p.jsx)(`a`,{href:`/problems/`,children:`← All problems`}),(0,p.jsx)(`p`,{children:`Practice it`}),(0,p.jsx)(`a`,{href:`/flashcards/?deck=problems&problem=${e.id}`,children:`Open this flashcard ↗`}),(0,p.jsx)(`p`,{children:`Source`}),(0,p.jsx)(`a`,{href:`https://github.com/BrianSigafoos/leetcode-practice/tree/main/solutions/${e.id}`,target:`_blank`,rel:`noreferrer`,children:`Ruby solution ↗`})]}),(0,p.jsxs)(`div`,{className:`problem-detail-content`,children:[s.length>0&&(0,p.jsxs)(`nav`,{className:`related-algorithms`,"aria-label":`Related algorithm guides`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`p`,{className:`card-label`,children:`Related algorithm deep dives`}),(0,p.jsx)(`p`,{children:`Review the reusable pattern behind this solution.`})]}),(0,p.jsx)(`div`,{children:s.map(e=>(0,p.jsxs)(`a`,{href:`/algorithms/${e.id}/`,children:[(0,p.jsx)(`span`,{children:e.eyebrow}),(0,p.jsxs)(`strong`,{children:[e.title,` →`]})]},e.id))})]}),a&&(0,p.jsxs)(`section`,{className:`best-ruby-solution`,id:`best-ruby`,children:[(0,p.jsxs)(`div`,{className:`best-ruby-heading`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsx)(`p`,{className:`kicker`,children:`Best Ruby 3.2 solution`}),(0,p.jsx)(`h2`,{children:e.approach})]}),(0,p.jsx)(`p`,{children:`Type this from memory, then narrate the invariant and test the sharpest edge case.`})]}),(0,p.jsx)(oe,{code:a.code})]}),(0,p.jsx)(`article`,{className:`problem-markdown markdown-content`,dangerouslySetInnerHTML:{__html:o}})]})]}),(0,p.jsxs)(`nav`,{className:`next-guide`,children:[(0,p.jsxs)(`a`,{href:`/problems/${n.id}/`,children:[(0,p.jsx)(`small`,{children:`Previous problem`}),(0,p.jsxs)(`strong`,{children:[`← `,n.title]})]}),(0,p.jsxs)(`a`,{href:`/problems/${r.id}/`,children:[(0,p.jsx)(`small`,{children:`Next problem`}),(0,p.jsxs)(`strong`,{children:[r.title,` →`]})]})]})]})}function vn(){let[e,t]=(0,f.useState)(``),n=(0,f.useMemo)(()=>{let t=e.trim().toLowerCase();return t?T.filter(e=>[e.number,e.title,e.prompt,e.pattern,e.approach,e.time,e.space].join(` `).toLowerCase().includes(t)):T},[e]);return(0,p.jsxs)(v,{active:`problems`,children:[(0,p.jsx)(b,{label:`52 Ruby problem guides`,title:`Problems`,reminder:`Before opening a guide, say the likely pattern, the invariant, time complexity, and auxiliary space. A wrong guess is still a useful rep.`,cues:[`start with brute force`,`use constraints to optimize`,`state the invariant`,`test an edge case aloud`]}),(0,p.jsxs)(`section`,{className:`section problem-library`,children:[(0,p.jsxs)(`div`,{className:`library-toolbar`,children:[(0,p.jsxs)(`p`,{"aria-live":`polite`,children:[(0,p.jsx)(`strong`,{children:n.length===T.length?`${T.length} problem guides`:`${n.length} of ${T.length} guides`}),` Try the matching flashcard before reading the discussion.`]}),(0,p.jsxs)(`div`,{className:`search-box`,role:`search`,children:[(0,p.jsx)(`span`,{"aria-hidden":`true`,children:`⌕`}),(0,p.jsx)(`input`,{"aria-label":`Search problem guides`,value:e,onChange:e=>t(e.target.value),placeholder:`Search: sliding window, tree, O(log n)…`}),e&&(0,p.jsx)(`button`,{type:`button`,"aria-label":`Clear problem search`,onClick:()=>t(``),children:`×`})]})]}),(0,p.jsx)(`div`,{className:`problem-grid`,children:n.map(e=>(0,p.jsxs)(`a`,{className:`problem-card`,href:`/problems/${e.id}/`,children:[(0,p.jsxs)(`div`,{children:[(0,p.jsxs)(`span`,{children:[`#`,e.number]}),(0,p.jsx)(`em`,{children:e.pattern})]}),(0,p.jsx)(`h2`,{children:e.title}),(0,p.jsx)(`p`,{children:e.prompt}),(0,p.jsx)(`strong`,{children:e.approach}),(0,p.jsxs)(`dl`,{children:[(0,p.jsx)(`dt`,{children:`Time`}),(0,p.jsx)(`dd`,{children:e.time}),(0,p.jsx)(`dt`,{children:`Space`}),(0,p.jsx)(`dd`,{children:e.space})]})]},e.id))}),n.length===0&&(0,p.jsx)(`div`,{className:`no-results`,children:`No matching problem. Try an algorithm pattern or complexity.`})]})]})}function yn(){return window.location.pathname.replace(/\/+$/,``)||`/`}function bn(){return(0,p.jsx)(v,{children:(0,p.jsxs)(`section`,{className:`not-found`,id:`top`,children:[(0,p.jsx)(`p`,{className:`kicker`,children:`404`}),(0,p.jsx)(`h1`,{children:`This study path does not exist.`}),(0,p.jsx)(`p`,{children:`Return to the refresher or choose a topic from the navigation.`}),(0,p.jsx)(`a`,{className:`primary-button`,href:`/`,children:`Back home`})]})})}function xn(){let e=yn();if(e===`/`)return(0,p.jsx)(S,{});if(e===`/algorithms`)return(0,p.jsx)(ue,{});if(e===`/flashcards`)return(0,p.jsx)(De,{});if(e===`/architecture`)return(0,p.jsx)(pe,{});if(e===`/ruby`)return(0,p.jsx)(je,{});if(e===`/problems`)return(0,p.jsx)(vn,{});let t=e.match(/^\/problems\/([^/]+)$/);if(t){let e=le[t[1]];return e?(0,p.jsx)(_n,{problem:e}):(0,p.jsx)(bn,{})}let n=e.match(/^\/algorithms\/([^/]+)$/);if(n){let e=ne[n[1]];return e?(0,p.jsx)(D,{algorithm:e}):(0,p.jsx)(bn,{})}let r=e.match(/^\/architecture\/([^/]+)$/);if(r){let e=ie[r[1]];return e?(0,p.jsx)(fe,{guide:e}):(0,p.jsx)(bn,{})}return(0,p.jsx)(bn,{})}(0,d.createRoot)(document.getElementById(`root`)).render((0,p.jsx)(f.StrictMode,{children:(0,p.jsx)(xn,{})}));
