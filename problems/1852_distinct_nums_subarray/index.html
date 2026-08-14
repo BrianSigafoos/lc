@@ -5,10 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="A private Ruby 3.2 interview refresher with 52 verified problem discussions, approach-recall flashcards, algorithm guides, and system-design case studies." />
     <meta name="robots" content="noindex, nofollow" />
-    <meta name="theme-color" content="#16231d" />
+    <meta name="theme-color" content="#ece4d5" />
+    <script>
+      (() => {
+        try {
+          const saved = localStorage.getItem("reprime-theme");
+          const theme = saved === "dark" || saved === "light"
+            ? saved
+            : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+          document.documentElement.dataset.theme = theme;
+          document.querySelector('meta[name="theme-color"]').content = theme === "dark" ? "#111914" : "#ece4d5";
+        } catch {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
     <title>Ruby Re-prime — LeetCode Refresher</title>
-    <script type="module" crossorigin src="/assets/index-BxjVNZoq.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DCyjotF8.css">
+    <script type="module" crossorigin src="/assets/index-B7V3Hqu0.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CiNrwiuq.css">
   </head>
   <body>
     <div id="root"></div>
